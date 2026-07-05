@@ -34,6 +34,7 @@ app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/api/time', (req, res) => res.json({ now: new Date().toISOString() }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/organizations', organizationRoutes);
