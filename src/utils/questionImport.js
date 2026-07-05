@@ -1,11 +1,11 @@
 const XLSX = require('xlsx');
 
 const MAX_ROWS = 500;
-const TEMPLATE_HEADERS = ['Question', 'Option1', 'Option2', 'Option3', 'Option4', 'Answer'];
+const TEMPLATE_HEADERS = ['Question', 'Type', 'Marks', 'Difficulty', 'Option1', 'Option2', 'Option3', 'Option4', 'Answer'];
 const TEMPLATE_ROWS = [
-  ['What is the capital of France?', 'Berlin', 'Madrid', 'Paris', 'Rome', 'Paris'],
-  ['Which planet is known as the Red Planet?', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Mars'],
-  ['2 + 2 * 2 = ?', '4', '6', '8', '10', '6'],
+  ['What is the capital of France?', 'Multiple Choice', 1, 'Easy', 'Berlin', 'Madrid', 'Paris', 'Rome', 'Paris'],
+  ['Water boils at 100 degrees Celsius.', 'True/False', 1, 'Medium', '', '', '', '', 'True'],
+  ['Explain the significance of the Turing Test.', 'Descriptive', 5, 'Hard', '', '', '', '', ''],
 ];
 
 const normalizeHeader = (h) => String(h || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -46,12 +46,12 @@ function parseQuestionsWorkbook(buffer, defaults) {
     if (idx !== -1) optionIndices.push(idx);
   }
 
-  if (colIndex.question === -1 || optionIndices.length < 2 || colIndex.answer === -1) {
+  if (colIndex.question === -1) {
     return {
       questions: [],
       errors: [{
         row: 0,
-        error: 'The file must have a header row with at least: Question, Option1, Option2, ..., Answer.',
+        error: 'The file must have a header row with at least the "Question" column.',
       }],
     };
   }
@@ -72,46 +72,81 @@ function parseQuestionsWorkbook(buffer, defaults) {
       .filter((opt) => opt.length > 0);
     const rawAnswer = String(row[colIndex.answer] ?? '').trim();
 
+    const parsedType = (colIndex.type !== -1 && row[colIndex.type]) ? String(row[colIndex.type]).trim() : defaults.type;
+    const parsedSubject = (colIndex.subject !== -1 && row[colIndex.subject]) ? String(row[colIndex.subject]).trim() : defaults.subject;
+    const parsedMarks = (colIndex.marks !== -1 && row[colIndex.marks]) ? Number(row[colIndex.marks]) || defaults.marks : defaults.marks;
+    const parsedDifficulty = (colIndex.difficulty !== -1 && row[colIndex.difficulty]) ? String(row[colIndex.difficulty]).trim() : defaults.difficulty;
+
     if (!text) {
       errors.push({ row: rowNum, error: 'Question text is empty.' });
       return;
     }
-    if (options.length < 2) {
-      errors.push({ row: rowNum, error: 'At least 2 non-empty options are required.' });
-      return;
-    }
-    if (!rawAnswer) {
-      errors.push({ row: rowNum, error: 'Answer is empty.' });
-      return;
-    }
 
-    let correctAnswer = -1;
-    // 1) exact text match against an option (case-insensitive)
-    correctAnswer = options.findIndex((opt) => opt.toLowerCase() === rawAnswer.toLowerCase());
-    // 2) letter form: A/B/C/D
-    if (correctAnswer === -1 && /^[a-zA-Z]$/.test(rawAnswer)) {
-      const letterIdx = rawAnswer.toUpperCase().charCodeAt(0) - 65;
-      if (letterIdx >= 0 && letterIdx < options.length) correctAnswer = letterIdx;
-    }
-    // 3) numeric form: 1/2/3/4 (1-indexed)
-    if (correctAnswer === -1 && /^\d+$/.test(rawAnswer)) {
-      const numIdx = parseInt(rawAnswer, 10) - 1;
-      if (numIdx >= 0 && numIdx < options.length) correctAnswer = numIdx;
-    }
+    let finalOptions = [];
+    let finalCorrectAnswer = 0;
 
-    if (correctAnswer === -1) {
-      errors.push({ row: rowNum, error: `Answer "${rawAnswer}" does not match any option, letter (A-D), or option number.` });
-      return;
+    if (parsedType === 'Descriptive') {
+      finalOptions = [];
+      finalCorrectAnswer = 0;
+    } else if (parsedType === 'True/False') {
+      finalOptions = ['True', 'False'];
+      if (!rawAnswer) {
+        errors.push({ row: rowNum, error: 'Answer is required for True/False questions (True or False).' });
+        return;
+      }
+      const ansLower = rawAnswer.toLowerCase();
+      if (ansLower === 'true' || ansLower === 't') {
+        finalCorrectAnswer = 0;
+      } else if (ansLower === 'false' || ansLower === 'f') {
+        finalCorrectAnswer = 1;
+      } else {
+        errors.push({ row: rowNum, error: `Answer "${rawAnswer}" must be True or False.` });
+        return;
+      }
+    } else {
+      // Default to Multiple Choice
+      finalOptions = options;
+      if (finalOptions.length < 2) {
+        errors.push({ row: rowNum, error: 'At least 2 non-empty options are required for Multiple Choice questions.' });
+        return;
+      }
+      if (colIndex.answer === -1) {
+        errors.push({ row: rowNum, error: 'An Answer column is required for Multiple Choice questions.' });
+        return;
+      }
+      if (!rawAnswer) {
+        errors.push({ row: rowNum, error: 'Answer is empty.' });
+        return;
+      }
+
+      finalCorrectAnswer = -1;
+      // 1) exact text match against an option (case-insensitive)
+      finalCorrectAnswer = finalOptions.findIndex((opt) => opt.toLowerCase() === rawAnswer.toLowerCase());
+      // 2) letter form: A/B/C/D
+      if (finalCorrectAnswer === -1 && /^[a-zA-Z]$/.test(rawAnswer)) {
+        const letterIdx = rawAnswer.toUpperCase().charCodeAt(0) - 65;
+        if (letterIdx >= 0 && letterIdx < finalOptions.length) finalCorrectAnswer = letterIdx;
+      }
+      // 3) numeric form: 1/2/3/4 (1-indexed)
+      if (finalCorrectAnswer === -1 && /^\d+$/.test(rawAnswer)) {
+        const numIdx = parseInt(rawAnswer, 10) - 1;
+        if (numIdx >= 0 && numIdx < finalOptions.length) finalCorrectAnswer = numIdx;
+      }
+
+      if (finalCorrectAnswer === -1) {
+        errors.push({ row: rowNum, error: `Answer "${rawAnswer}" does not match any option, letter (A-D), or option number.` });
+        return;
+      }
     }
 
     questions.push({
       text,
-      options,
-      correctAnswer,
-      subject: (colIndex.subject !== -1 && row[colIndex.subject]) ? String(row[colIndex.subject]).trim() : defaults.subject,
-      marks: (colIndex.marks !== -1 && row[colIndex.marks]) ? Number(row[colIndex.marks]) || defaults.marks : defaults.marks,
-      difficulty: (colIndex.difficulty !== -1 && row[colIndex.difficulty]) ? String(row[colIndex.difficulty]).trim() : defaults.difficulty,
-      type: (colIndex.type !== -1 && row[colIndex.type]) ? String(row[colIndex.type]).trim() : defaults.type,
+      options: finalOptions,
+      correctAnswer: finalCorrectAnswer,
+      subject: parsedSubject,
+      marks: parsedMarks,
+      difficulty: parsedDifficulty,
+      type: parsedType,
     });
   });
 

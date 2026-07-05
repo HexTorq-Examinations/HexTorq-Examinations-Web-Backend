@@ -48,9 +48,16 @@ const list = asyncHandler(async (req, res) => {
 
 const create = asyncHandler(async (req, res) => {
   const { examId } = req.params;
-  const { text, subject, options } = req.body;
-  if (!text || !subject || !Array.isArray(options) || options.length < 2) {
-    throw new ApiError(400, 'text, subject, and at least 2 options are required');
+  const { text, subject, type, options } = req.body;
+  if (!text || !subject) {
+    throw new ApiError(400, 'text and subject are required');
+  }
+  const qType = type || 'Multiple Choice';
+  if (qType === 'Multiple Choice' && (!Array.isArray(options) || options.length < 2)) {
+    throw new ApiError(400, 'at least 2 options are required for Multiple Choice questions');
+  }
+  if (qType === 'True/False' && (!Array.isArray(options) || options.length !== 2)) {
+    throw new ApiError(400, 'exactly 2 options (True, False) are required for True/False questions');
   }
   await assertOwnedExam(examId, req.user.organizationId);
   const question = await prisma.question.create({ data: buildData(req.body, examId) });
