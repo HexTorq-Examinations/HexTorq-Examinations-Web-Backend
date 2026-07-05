@@ -116,7 +116,6 @@ const importFromFile = asyncHandler(async (req, res) => {
     where: { email: { in: emails } },
     select: { email: true },
   });
-  if (existingUsers.length > 0) {
   const dupeEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
   const dupeErrors = students
     .map((s, i) => ({ s, i }))
