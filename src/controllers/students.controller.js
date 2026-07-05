@@ -125,26 +125,28 @@ const importFromFile = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: 'The file has errors and was not imported.', errors: dupeErrors });
   }
 
-  const operations = await Promise.all(
-    students.map(async (s) => {
-      const hash = await bcrypt.hash(s.password || DEFAULT_PASSWORD, 10);
-      return prisma.user.create({
-        data: {
-          name: s.name,
-          email: s.email,
-          phone: s.phone,
-          status: s.status,
-          role: 'STUDENT',
-          passwordHash: hash,
-          organizationId: req.user.organizationId || undefined,
-          studentProfile: {
-            create: { registerNumber: s.registerNumber, classId },
-          },
-        },
-        include: { studentProfile: true },
-      });
-    })
+  // Hash passwords first (async) so the $transaction array below holds un-awaited
+  // Prisma Client promises only — awaiting them here would make $transaction reject
+  // with "All elements of the array need to be Prisma Client promises".
+  const hashes = await Promise.all(
+    students.map((s) => bcrypt.hash(s.password || DEFAULT_PASSWORD, 10))
   );
+
+  const operations = students.map((s, i) => prisma.user.create({
+    data: {
+      name: s.name,
+      email: s.email,
+      phone: s.phone,
+      status: s.status,
+      role: 'STUDENT',
+      passwordHash: hashes[i],
+      organizationId: req.user.organizationId || undefined,
+      studentProfile: {
+        create: { registerNumber: s.registerNumber, classId },
+      },
+    },
+    include: { studentProfile: true },
+  }));
 
   const created = await prisma.$transaction(operations);
 
