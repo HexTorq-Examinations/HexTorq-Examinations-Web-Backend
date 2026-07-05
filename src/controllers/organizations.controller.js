@@ -1,3 +1,4 @@
+const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
@@ -24,9 +25,30 @@ const create = asyncHandler(async (req, res) => {
   const { name, code, domain, adminEmail, status, plan } = req.body;
   if (!name || !code || !adminEmail) throw new ApiError(400, 'name, code and adminEmail are required');
 
-  const org = await prisma.organization.create({
-    data: { name, code, domain, adminEmail, status: status || 'Active', plan: plan || 'Basic' },
+  const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } });
+  if (existingUser) throw new ApiError(409, 'A user with this admin email already exists');
+
+  const passwordHash = await bcrypt.hash('password123', 10);
+
+  const org = await prisma.$transaction(async (tx) => {
+    const newOrg = await tx.organization.create({
+      data: { name, code, domain, adminEmail, status: status || 'Active', plan: plan || 'Basic' },
+    });
+
+    await tx.user.create({
+      data: {
+        name: `Admin - ${name}`,
+        email: adminEmail,
+        passwordHash,
+        role: 'ADMIN',
+        status: 'Active',
+        organizationId: newOrg.id,
+      },
+    });
+
+    return newOrg;
   });
+
   res.status(201).json(org);
 });
 
