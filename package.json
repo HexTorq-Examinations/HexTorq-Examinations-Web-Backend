@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "node prisma/seed.js",
+    "bootstrap:super-admin": "node prisma/bootstrap-super-admin.js",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {

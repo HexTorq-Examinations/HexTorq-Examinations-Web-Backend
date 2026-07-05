@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const { parseStudentsWorkbook, generateTemplateBuffer } = require('../utils/studentImport');
 
 const DEFAULT_PASSWORD = 'password123';
 
@@ -91,4 +92,68 @@ const remove = asyncHandler(async (req, res) => {
   res.json({ success: true });
 });
 
-module.exports = { list, create, update, remove };
+const importFromFile = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, 'No file uploaded');
+
+  const { students, errors } = parseStudentsWorkbook(req.file.buffer);
+
+  if (errors.length > 0) {
+    return res.status(400).json({ message: 'The file has errors and was not imported.', errors });
+  }
+  if (students.length === 0) {
+    throw new ApiError(400, 'No valid students were found in the file.');
+  }
+
+  // Emails must be unique across the whole system, not just within this file.
+  const emails = students.map((s) => s.email);
+  const existingUsers = await prisma.user.findMany({
+    where: { email: { in: emails } },
+    select: { email: true },
+  });
+  if (existingUsers.length > 0) {
+    const dupeEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
+    const dupeErrors = students
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => dupeEmails.has(s.email.toLowerCase()))
+      .map(({ s, i }) => ({ row: i + 2, error: `A user with email "${s.email}" already exists.` }));
+    return res.status(400).json({ message: 'The file has errors and was not imported.', errors: dupeErrors });
+  }
+
+  const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  const created = await prisma.$transaction(
+    students.map((s) => prisma.user.create({
+      data: {
+        name: s.name,
+        email: s.email,
+        phone: s.phone,
+        status: s.status,
+        role: 'STUDENT',
+        passwordHash,
+        organizationId: req.user.organizationId || undefined,
+        studentProfile: {
+          create: { registerNumber: s.registerNumber, department: s.department, semester: s.semester },
+        },
+      },
+      include: { studentProfile: true },
+    }))
+  );
+
+  res.status(201).json(created.map(toPublic));
+});
+
+const downloadTemplate = asyncHandler(async (req, res) => {
+  const format = (req.query.format || 'xlsx').toLowerCase();
+  const mimeTypes = {
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xls: 'application/vnd.ms-excel',
+    csv: 'text/csv',
+  };
+  if (!mimeTypes[format]) throw new ApiError(400, 'format must be one of: xlsx, xls, csv');
+
+  const buffer = generateTemplateBuffer(format);
+  res.setHeader('Content-Type', mimeTypes[format]);
+  res.setHeader('Content-Disposition', `attachment; filename="student-import-template.${format}"`);
+  res.send(buffer);
+});
+
+module.exports = { list, create, update, remove, importFromFile, downloadTemplate };
