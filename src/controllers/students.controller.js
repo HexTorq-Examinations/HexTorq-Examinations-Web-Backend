@@ -35,7 +35,7 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, registerNumber, department, semester, email, phone, status } = req.body;
+  const { name, registerNumber, department, semester, email, phone, status, password } = req.body;
   if (!name || !registerNumber || !department || !semester || !phone) {
     throw new ApiError(400, 'Missing required student fields');
   }
@@ -45,7 +45,7 @@ const create = asyncHandler(async (req, res) => {
   const existing = await prisma.user.findUnique({ where: { email: finalEmail } });
   if (existing) throw new ApiError(409, 'A user with this email already exists');
 
-  const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  const passwordHash = await bcrypt.hash(password || DEFAULT_PASSWORD, 10);
   const student = await prisma.user.create({
     data: {
       name,
