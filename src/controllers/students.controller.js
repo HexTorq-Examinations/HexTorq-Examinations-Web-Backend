@@ -117,22 +117,26 @@ const importFromFile = asyncHandler(async (req, res) => {
     select: { email: true },
   });
   if (existingUsers.length > 0) {
-    const dupeEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
-    const dupeErrors = students
-      .map((s, i) => ({ s, i }))
-      .filter(({ s }) => dupeEmails.has(s.email.toLowerCase()))
-      .map(({ s, i }) => ({ row: i + 2, error: `A user with email "${s.email}" already exists.` }));
-    return res.status(400).json({ message: 'The file has errors and was not imported.', errors: dupeErrors });
+  const dupeEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
+  const dupeErrors = students
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => dupeEmails.has(s.email.toLowerCase()))
+    .map(({ s, i }) => ({ row: i + 2, error: `A user with email "${s.email}" already exists.` }));
+
+  const validStudents = students.filter(s => !dupeEmails.has(s.email.toLowerCase()));
+
+  if (validStudents.length === 0 && dupeErrors.length > 0) {
+    return res.status(400).json({ message: 'All students in the file already exist.', errors: dupeErrors });
   }
 
   // Hash passwords first (async) so the $transaction array below holds un-awaited
   // Prisma Client promises only — awaiting them here would make $transaction reject
   // with "All elements of the array need to be Prisma Client promises".
   const hashes = await Promise.all(
-    students.map((s) => bcrypt.hash(s.password || DEFAULT_PASSWORD, 10))
+    validStudents.map((s) => bcrypt.hash(s.password || DEFAULT_PASSWORD, 10))
   );
 
-  const operations = students.map((s, i) => prisma.user.create({
+  const operations = validStudents.map((s, i) => prisma.user.create({
     data: {
       name: s.name,
       email: s.email,
@@ -150,7 +154,10 @@ const importFromFile = asyncHandler(async (req, res) => {
 
   const created = await prisma.$transaction(operations);
 
-  res.status(201).json(created.map(toPublic));
+  res.status(201).json({
+    students: created.map(toPublic),
+    errors: dupeErrors,
+  });
 });
 
 const downloadTemplate = asyncHandler(async (req, res) => {
