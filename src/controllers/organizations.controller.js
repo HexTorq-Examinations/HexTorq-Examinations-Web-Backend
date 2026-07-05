@@ -24,9 +24,10 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, code, domain, adminEmail, status, plan } = req.body;
-  if (!name || !code || !adminEmail) throw new ApiError(400, 'name, code and adminEmail are required');
-
+  const { name, code, domain, adminEmail, status, plan, frontendUrl } = req.body;
+  if (!name || !code || !adminEmail) {
+    throw new ApiError(400, 'name, code, and adminEmail are required');
+  }
   const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } });
   if (existingUser) throw new ApiError(409, 'A user with this admin email already exists');
 
@@ -56,8 +57,8 @@ const create = asyncHandler(async (req, res) => {
   });
 
   try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    await sendAdminActivationEmail(adminEmail, `Admin - ${name}`, resetToken, frontendUrl);
+    const url = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
+    await sendAdminActivationEmail(adminEmail, `Admin - ${name}`, resetToken, url);
   } catch (error) {
     console.error('Failed to send activation email:', error);
   }

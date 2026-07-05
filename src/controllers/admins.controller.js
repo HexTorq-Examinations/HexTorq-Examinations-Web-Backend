@@ -33,7 +33,7 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, email, phone, empId, employeeId, role, status, organizationId } = req.body;
+  const { name, email, phone, empId, employeeId, role, status, organizationId, frontendUrl } = req.body;
   if (!name || !email) throw new ApiError(400, 'name and email are required');
 
   const dbRole = roleToDb(role);
@@ -67,8 +67,8 @@ const create = asyncHandler(async (req, res) => {
 
   // Attempt to send email, but don't fail the request if email sending fails
   try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    await sendAdminActivationEmail(admin.email, admin.name, resetToken, frontendUrl);
+    const url = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
+    await sendAdminActivationEmail(admin.email, admin.name, resetToken, url);
   } catch (error) {
     console.error('Failed to send activation email:', error);
   }
