@@ -14,6 +14,7 @@ const scheduleRoutes = require('./routes/schedules.routes');
 const resultRoutes = require('./routes/results.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const userRoutes = require('./routes/users.routes');
+const messagingRoutes = require('./routes/messaging.routes');
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use('/api/schedules', scheduleRoutes);
 app.use('/api/results', resultRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/messages', messagingRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
