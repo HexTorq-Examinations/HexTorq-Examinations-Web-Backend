@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  STUDENT
+}
+
+model Organization {
+  id         String   @id @default(cuid())
+  name       String
+  code       String   @unique
+  domain     String?
+  adminEmail String
+  status     String   @default("Active")
+  plan       String   @default("Basic")
+  createdAt  DateTime @default(now())
+
+  users     User[]
+  questions Question[]
+  exams     Exam[]
+  schedules Schedule[]
+  results   Result[]
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  passwordHash   String
+  role           Role
+  phone          String?
+  employeeId     String?
+  avatar         String?
+  status         String    @default("Active")
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  studentProfile StudentProfile?
+  examAttempts   ExamAttempt[]
+}
+
+model StudentProfile {
+  id             String @id @default(cuid())
+  userId         String @unique
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  registerNumber String
+  department     String
+  semester       String
+}
+
+model Question {
+  id             String   @id @default(cuid())
+  text           String
+  subject        String
+  type           String   @default("Multiple Choice")
+  difficulty     String   @default("Medium")
+  marks          Int      @default(1)
+  options        String[]
+  correctAnswer  Int      @default(0)
+  explanation    String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+
+  examQuestions ExamQuestion[]
+}
+
+model Exam {
+  id               String   @id @default(cuid())
+  title            String
+  subject          String
+  description      String?
+  duration         Int
+  totalMarks       Int
+  passingMarks     Int
+  startDate        DateTime
+  endDate          DateTime
+  status           String   @default("Draft")
+  shuffleQuestions Boolean  @default(false)
+  shuffleOptions   Boolean  @default(false)
+  negativeMarking  Boolean  @default(false)
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now())
+
+  examQuestions ExamQuestion[]
+  schedules     Schedule[]
+  results       Result[]
+  attempts      ExamAttempt[]
+}
+
+model ExamQuestion {
+  id         String @id @default(cuid())
+  examId     String
+  exam       Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, questionId])
+}
+
+model Schedule {
+  id             String   @id @default(cuid())
+  examId         String
+  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  batch          String
+  department     String
+  date           DateTime
+  startTime      String
+  endTime        String
+  hall           String   @default("Virtual")
+  status         String   @default("Scheduled")
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+}
+
+model Result {
+  id             String    @id @default(cuid())
+  examId         String
+  exam           Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  totalStudents  Int       @default(0)
+  publishedDate  DateTime?
+  status         String    @default("Pending Evaluation")
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+}
+
+model ExamAttempt {
+  id         String    @id @default(cuid())
+  examId     String
+  exam       Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     String    @default("IN_PROGRESS")
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+  score      Int       @default(0)
+  answers    Json      @default("{}")
+  violations Json      @default("[]")
+  createdAt  DateTime  @default(now())
+}
