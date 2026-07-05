@@ -23,27 +23,30 @@ const hierarchyCounts = async (orgFilter, batchId) => {
 };
 
 const superAdminStats = asyncHandler(async (req, res) => {
-  const [totalOrganizations, totalStudents, totalAdmins, activeExams, totalExams, publishedResults] = await Promise.all([
+  const [totalOrganizations, totalStudents, totalAdmins, activeExams, totalExams, publishedResults, totalAttempts] = await Promise.all([
     prisma.organization.count(),
     prisma.user.count({ where: { role: 'STUDENT' } }),
     prisma.user.count({ where: { role: { in: ['ADMIN', 'SUPER_ADMIN'] } } }),
     prisma.exam.count({ where: { status: 'Active' } }),
     prisma.exam.count(),
     prisma.result.count({ where: { status: 'Published' } }),
+    prisma.examAttempt.count({ where: { status: { in: ['COMPLETED', 'TERMINATED'] } } }),
   ]);
-  res.json({ totalOrganizations, totalStudents, totalAdmins, activeExams, totalExams, publishedResults, ...(await hierarchyCounts({})) });
+  res.json({ totalOrganizations, totalStudents, totalAdmins, activeExams, totalExams, publishedResults, totalAttempts, ...(await hierarchyCounts({})) });
 });
 
 const adminStats = asyncHandler(async (req, res) => {
   const orgFilter = req.user.organizationId ? { organizationId: req.user.organizationId } : {};
   const { batchId } = req.query;
-  const [totalStudents, activeExams, totalExams, publishedResults] = await Promise.all([
+  const attemptUserFilter = batchId ? { user: studentBatchWhere(batchId) } : {};
+  const [totalStudents, activeExams, totalExams, publishedResults, totalAttempts] = await Promise.all([
     prisma.user.count({ where: { role: 'STUDENT', ...orgFilter, ...studentBatchWhere(batchId) } }),
     prisma.exam.count({ where: { status: 'Active', ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.exam.count({ where: { ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.result.count({ where: { ...orgFilter, status: 'Published', exam: examBatchWhere(batchId) } }),
+    prisma.examAttempt.count({ where: { exam: orgFilter, ...attemptUserFilter, status: { in: ['COMPLETED', 'TERMINATED'] } } }),
   ]);
-  res.json({ totalStudents, activeExams, totalExams, publishedResults, ...(await hierarchyCounts(orgFilter, batchId)) });
+  res.json({ totalStudents, activeExams, totalExams, publishedResults, totalAttempts, ...(await hierarchyCounts(orgFilter, batchId)) });
 });
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -115,6 +118,19 @@ const getOverview = asyncHandler(async (req, res) => {
     runningTotal += newPerQuarter[i];
     return { name, active: runningTotal, new: newPerQuarter[i] };
   });
+
+  // ---- Weekly activity (for the Reports chart): exam attempts started per day, Mon-Sun this week ----
+  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dayOfWeek = (now.getDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+  const weeklyActivity = await Promise.all(DAY_NAMES.map(async (name, i) => {
+    const start = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+    const end = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i + 1);
+    const attempts = await prisma.examAttempt.count({
+      where: { exam: orgFilter, ...attemptUserFilter, startedAt: { gte: start, lt: end } },
+    });
+    return { name, attempts };
+  }));
 
   // ---- Students per department (for the Reports chart) ----
   const departmentWhere = {
@@ -189,6 +205,7 @@ const getOverview = asyncHandler(async (req, res) => {
     examTrends,
     examStatusDistribution,
     studentGrowth,
+    weeklyActivity,
     studentsByDepartment,
     recentActivity: activity,
     upcomingExams,
