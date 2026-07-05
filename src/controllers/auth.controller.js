@@ -15,6 +15,8 @@ const toPublicUser = (user) => ({
   email: user.email,
   role: user.role,
   avatar: user.avatar,
+  phone: user.phone,
+  lastLoginAt: user.lastLoginAt,
   organizationId: user.organizationId || undefined,
 });
 
