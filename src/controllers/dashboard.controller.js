@@ -21,4 +21,118 @@ const adminStats = asyncHandler(async (req, res) => {
   res.json({ totalStudents, activeExams, totalExams });
 });
 
-module.exports = { superAdminStats, adminStats };
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const STATUS_COLORS = {
+  Completed: '#10b981',
+  Active: '#3b82f6',
+  Draft: '#94a3b8',
+  Scheduled: '#8b5cf6',
+};
+
+// Everything below is derived from real rows (exams, attempts, students, results,
+// questions) — there is no separate "activity log" table, so the activity feed and
+// "student growth" numbers are computed from existing timestamped records rather
+// than a purpose-built audit trail.
+const getOverview = asyncHandler(async (req, res) => {
+  const isScoped = req.user.role === 'ADMIN' && req.user.organizationId;
+  const orgFilter = isScoped ? { organizationId: req.user.organizationId } : {};
+  const examOrgFilter = isScoped ? { exam: { organizationId: req.user.organizationId } } : {};
+
+  const now = new Date();
+
+  // ---- Exam trends: exams created vs. attempts completed, per month, last 7 months ----
+  const monthWindows = [];
+  for (let i = 6; i >= 0; i--) {
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    monthWindows.push({ name: MONTH_NAMES[start.getMonth()], start, end });
+  }
+  const examTrends = await Promise.all(monthWindows.map(async ({ name, start, end }) => {
+    const [created, completed] = await Promise.all([
+      prisma.exam.count({ where: { ...orgFilter, createdAt: { gte: start, lt: end } } }),
+      prisma.examAttempt.count({
+        where: { ...examOrgFilter, status: 'COMPLETED', endedAt: { gte: start, lt: end } },
+      }),
+    ]);
+    return { name, created, completed };
+  }));
+
+  // ---- Exam status distribution (real counts by current status) ----
+  const statusGroups = await prisma.exam.groupBy({
+    by: ['status'],
+    where: orgFilter,
+    _count: { status: true },
+  });
+  const examStatusDistribution = Object.keys(STATUS_COLORS).map((status) => ({
+    name: status,
+    value: statusGroups.find((g) => g.status === status)?._count.status || 0,
+    color: STATUS_COLORS[status],
+  }));
+
+  // ---- Student growth: registrations per quarter of the current year, plus a running total ----
+  const quarterWindows = [0, 1, 2, 3].map((q) => ({
+    name: `Q${q + 1}`,
+    start: new Date(now.getFullYear(), q * 3, 1),
+    end: new Date(now.getFullYear(), q * 3 + 3, 1),
+  }));
+  let runningTotal = await prisma.user.count({
+    where: { role: 'STUDENT', ...orgFilter, createdAt: { lt: quarterWindows[0].start } },
+  });
+  const newPerQuarter = await Promise.all(quarterWindows.map(({ start, end }) => prisma.user.count({
+    where: { role: 'STUDENT', ...orgFilter, createdAt: { gte: start, lt: end } },
+  })));
+  const studentGrowth = quarterWindows.map(({ name }, i) => {
+    runningTotal += newPerQuarter[i];
+    return { name, active: runningTotal, new: newPerQuarter[i] };
+  });
+
+  // ---- Recent activity: merge the last few real events across a handful of tables ----
+  const [recentExams, recentResults, recentStudents, recentQuestions] = await Promise.all([
+    prisma.exam.findMany({ where: orgFilter, orderBy: { createdAt: 'desc' }, take: 5, select: { title: true, createdAt: true } }),
+    prisma.result.findMany({ where: { ...orgFilter, status: 'Published' }, orderBy: { publishedDate: 'desc' }, take: 5, include: { exam: { select: { title: true } } } }),
+    prisma.user.findMany({ where: { role: 'STUDENT', ...orgFilter }, orderBy: { createdAt: 'desc' }, take: 5, select: { name: true, createdAt: true } }),
+    prisma.question.findMany({ where: orgFilter, orderBy: { createdAt: 'desc' }, take: 5, select: { subject: true, createdAt: true } }),
+  ]);
+  const activity = [
+    ...recentExams.map((e) => ({ title: 'New Exam Created', desc: `"${e.title}" was created`, time: e.createdAt, type: 'create' })),
+    ...recentResults.map((r) => ({ title: 'Results Published', desc: `${r.exam.title} results are live`, time: r.publishedDate, type: 'publish' })),
+    ...recentStudents.map((s) => ({ title: 'Student Registered', desc: `${s.name} joined the platform`, time: s.createdAt, type: 'user' })),
+    ...recentQuestions.map((q) => ({ title: 'Question Added', desc: `New question added to ${q.subject}`, time: q.createdAt, type: 'alert' })),
+  ]
+    .filter((a) => a.time)
+    .sort((a, b) => new Date(b.time) - new Date(a.time))
+    .slice(0, 6)
+    .map((a) => ({ ...a, time: a.time.toISOString() }));
+
+  // ---- Upcoming exams (real, scoped, next 3) ----
+  const upcoming = await prisma.exam.findMany({
+    where: { ...orgFilter, startDate: { gt: now } },
+    orderBy: { startDate: 'asc' },
+    take: 3,
+  });
+  const enrolledCount = await prisma.user.count({ where: { role: 'STUDENT', ...orgFilter } });
+  const upcomingExams = upcoming.map((e) => ({
+    name: e.title,
+    time: e.startDate.toISOString(),
+    enrolled: enrolledCount,
+  }));
+
+  // ---- Pending tasks: real, actionable, computed from current state ----
+  const [draftExamsNoQuestions, pendingResults, pendingAdmins] = await Promise.all([
+    prisma.exam.findMany({
+      where: { ...orgFilter, status: 'Draft' },
+      include: { _count: { select: { examQuestions: true } } },
+    }).then((exams) => exams.filter((e) => e._count.examQuestions === 0).length),
+    prisma.result.count({ where: { ...orgFilter, status: 'Pending Evaluation' } }),
+    isScoped ? 0 : prisma.user.count({ where: { role: 'ADMIN', status: 'Pending' } }),
+  ]);
+  const pendingTasks = [
+    ...(pendingAdmins > 0 ? [{ task: `Approve ${pendingAdmins} pending admin activation${pendingAdmins > 1 ? 's' : ''}`, status: 'High Priority' }] : []),
+    ...(draftExamsNoQuestions > 0 ? [{ task: `${draftExamsNoQuestions} draft exam${draftExamsNoQuestions > 1 ? 's have' : ' has'} no questions assigned`, status: 'Medium' }] : []),
+    ...(pendingResults > 0 ? [{ task: `${pendingResults} result${pendingResults > 1 ? 's' : ''} awaiting evaluation`, status: 'Routine' }] : []),
+  ];
+
+  res.json({ examTrends, examStatusDistribution, studentGrowth, recentActivity: activity, upcomingExams, pendingTasks });
+});
+
+module.exports = { superAdminStats, adminStats, getOverview };

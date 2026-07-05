@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+const requestLogger = require('./middleware/requestLogger');
 
 const authRoutes = require('./routes/auth.routes');
 const organizationRoutes = require('./routes/organizations.routes');
@@ -27,6 +28,7 @@ app.use(cors({
   origin: corsOrigin,
   credentials: true,
 }));
+app.use(requestLogger);
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
