@@ -3,6 +3,7 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { parseStudentsWorkbook, generateTemplateBuffer } = require('../utils/studentImport');
+const { assertOwnedClass } = require('./classes.controller');
 
 const DEFAULT_PASSWORD = 'password123';
 
@@ -14,20 +15,16 @@ const toPublic = (u) => ({
   status: u.status,
   createdAt: u.createdAt.toISOString(),
   registerNumber: u.studentProfile?.registerNumber || '',
-  department: u.studentProfile?.department || '',
-  semester: u.studentProfile?.semester || '',
+  classId: u.studentProfile?.classId || '',
 });
 
-const scopeWhere = (req) => {
-  if (req.user.role === 'ADMIN' && req.user.organizationId) {
-    return { role: 'STUDENT', organizationId: req.user.organizationId };
-  }
-  return { role: 'STUDENT' };
-};
-
 const list = asyncHandler(async (req, res) => {
+  const { classId } = req.query;
+  if (!classId) throw new ApiError(400, 'classId query param is required');
+  await assertOwnedClass(classId, req.user.organizationId);
+
   const students = await prisma.user.findMany({
-    where: scopeWhere(req),
+    where: { role: 'STUDENT', studentProfile: { classId } },
     include: { studentProfile: true },
     orderBy: { createdAt: 'desc' },
   });
@@ -35,10 +32,11 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, registerNumber, department, semester, email, phone, status, password } = req.body;
-  if (!name || !registerNumber || !department || !semester || !phone) {
+  const { name, registerNumber, classId, email, phone, status, password } = req.body;
+  if (!name || !registerNumber || !classId || !phone) {
     throw new ApiError(400, 'Missing required student fields');
   }
+  await assertOwnedClass(classId, req.user.organizationId);
 
   const finalEmail = email || `${registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.hextorq.internal`;
 
@@ -56,7 +54,7 @@ const create = asyncHandler(async (req, res) => {
       passwordHash,
       organizationId: req.user.organizationId || undefined,
       studentProfile: {
-        create: { registerNumber, department, semester },
+        create: { registerNumber, classId },
       },
     },
     include: { studentProfile: true },
@@ -66,7 +64,11 @@ const create = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { name, registerNumber, department, semester, email, phone, status } = req.body;
+  const { name, registerNumber, classId, email, phone, status } = req.body;
+
+  if (classId !== undefined) {
+    await assertOwnedClass(classId, req.user.organizationId);
+  }
 
   const student = await prisma.user.update({
     where: { id },
@@ -78,8 +80,7 @@ const update = asyncHandler(async (req, res) => {
       studentProfile: {
         update: {
           ...(registerNumber !== undefined && { registerNumber }),
-          ...(department !== undefined && { department }),
-          ...(semester !== undefined && { semester }),
+          ...(classId !== undefined && { classId }),
         },
       },
     },
@@ -96,6 +97,9 @@ const remove = asyncHandler(async (req, res) => {
 
 const importFromFile = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, 'No file uploaded');
+  const { classId } = req.body;
+  if (!classId) throw new ApiError(400, 'classId is required');
+  await assertOwnedClass(classId, req.user.organizationId);
 
   const { students, errors } = parseStudentsWorkbook(req.file.buffer);
 
@@ -134,7 +138,7 @@ const importFromFile = asyncHandler(async (req, res) => {
           passwordHash: hash,
           organizationId: req.user.organizationId || undefined,
           studentProfile: {
-            create: { registerNumber: s.registerNumber, department: s.department, semester: s.semester },
+            create: { registerNumber: s.registerNumber, classId },
           },
         },
         include: { studentProfile: true },

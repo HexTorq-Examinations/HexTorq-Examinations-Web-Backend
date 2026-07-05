@@ -3,7 +3,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { uploadQuestionsFile } = require('../middleware/importUpload');
 const ctrl = require('../controllers/questions.controller');
 
-const router = express.Router();
+// Mounted at /api/exams/:examId/questions (mergeParams so :examId is visible here)
+const router = express.Router({ mergeParams: true });
 
 router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN'));
 

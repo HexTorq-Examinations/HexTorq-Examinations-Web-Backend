@@ -12,23 +12,36 @@ const shuffle = (arr) => {
   return result;
 };
 
+// A student may only view/start an exam once it's been mapped to their Class —
+// this is what Exam Mapping actually assigns. Throws 403 if no mapping exists.
+const assertStudentHasMapping = async (examId, userId) => {
+  const profile = await prisma.studentProfile.findUnique({ where: { userId } });
+  if (!profile) throw new ApiError(403, 'Only students can take exams');
+
+  const mapping = await prisma.examMapping.findUnique({
+    where: { examId_classId: { examId, classId: profile.classId } },
+  });
+  if (!mapping) throw new ApiError(403, 'This exam has not been scheduled for your class');
+  return mapping;
+};
+
 // Returns exam details + the question set (without correct answers) for the exam-taking UI.
 // Both question order and option order are randomized server-side, per request, when enabled
 // on the exam. The client only ever receives option text (never the correct-answer index),
 // and answers are matched by text server-side, so shuffling here cannot affect scoring.
 const getExamForTaking = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const exam = await prisma.exam.findUnique({
-    where: { id },
-    include: { examQuestions: { include: { question: true } } },
-  });
+  await assertStudentHasMapping(id, req.user.id);
+
+  const exam = await prisma.exam.findUnique({ where: { id } });
   if (!exam) throw new ApiError(404, 'Exam not found');
 
-  let questions = exam.examQuestions.map((eq) => ({
-    id: eq.question.id,
-    text: eq.question.text,
-    options: exam.shuffleOptions ? shuffle(eq.question.options) : eq.question.options,
-    marks: eq.question.marks,
+  const rawQuestions = await prisma.question.findMany({ where: { examId: id } });
+  let questions = rawQuestions.map((q) => ({
+    id: q.id,
+    text: q.text,
+    options: exam.shuffleOptions ? shuffle(q.options) : q.options,
+    marks: q.marks,
   }));
 
   if (exam.shuffleQuestions) {
@@ -48,6 +61,8 @@ const getExamForTaking = asyncHandler(async (req, res) => {
 
 const startAttempt = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  await assertStudentHasMapping(id, req.user.id);
+
   const exam = await prisma.exam.findUnique({ where: { id } });
   if (!exam) throw new ApiError(404, 'Exam not found');
 
@@ -160,18 +175,15 @@ const submitAttempt = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'No active attempt found for this exam');
   }
 
-  const examQuestions = await prisma.examQuestion.findMany({
-    where: { examId: id },
-    include: { question: true },
-  });
+  const questions = await prisma.question.findMany({ where: { examId: id } });
 
   const answers = attempt.answers || {};
   let score = 0;
-  for (const eq of examQuestions) {
-    const given = answers[eq.question.id];
-    const correctOption = eq.question.options[eq.question.correctAnswer];
+  for (const q of questions) {
+    const given = answers[q.id];
+    const correctOption = q.options[q.correctAnswer];
     if (given !== undefined && given === correctOption) {
-      score += eq.question.marks;
+      score += q.marks;
     }
   }
 

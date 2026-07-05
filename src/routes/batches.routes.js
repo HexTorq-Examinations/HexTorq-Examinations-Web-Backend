@@ -1,10 +1,10 @@
 const express = require('express');
 const { authenticate, authorize } = require('../middleware/auth');
-const ctrl = require('../controllers/schedules.controller');
+const ctrl = require('../controllers/batches.controller');
 
 const router = express.Router();
 
-router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN'));
+router.use(authenticate, authorize('ADMIN'));
 
 router.get('/', ctrl.list);
 router.post('/', ctrl.create);

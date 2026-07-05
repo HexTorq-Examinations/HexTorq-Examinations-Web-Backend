@@ -23,29 +23,28 @@ model Organization {
   plan       String   @default("Basic")
   createdAt  DateTime @default(now())
 
-  users     User[]
-  questions Question[]
-  exams     Exam[]
-  schedules Schedule[]
-  results   Result[]
+  users   User[]
+  exams   Exam[]
+  results Result[]
+  batches Batch[]
 }
 
 model User {
-  id             String    @id @default(cuid())
-  name           String
-  email          String    @unique
-  passwordHash   String
-  role           Role
-  phone          String?
-  employeeId     String?
-  avatar         String?
-  status         String    @default("Active")
-  organizationId String?
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  lastLoginAt    DateTime?
-  resetToken     String?
+  id               String    @id @default(cuid())
+  name             String
+  email            String    @unique
+  passwordHash     String
+  role             Role
+  phone            String?
+  employeeId       String?
+  avatar           String?
+  status           String    @default("Active")
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  lastLoginAt      DateTime?
+  resetToken       String?
   resetTokenExpiry DateTime?
-  createdAt      DateTime  @default(now())
+  createdAt        DateTime  @default(now())
 
   studentProfile StudentProfile?
   examAttempts   ExamAttempt[]
@@ -64,6 +63,7 @@ model Conversation {
   id          String           @id @default(cuid())
   type        ConversationType
   name        String? // group name; unused for DIRECT
+  classId     String?          @unique // set for the auto-managed per-Class announcement group
   createdById String
   createdBy   User             @relation("ConversationCreator", fields: [createdById], references: [id])
   createdAt   DateTime         @default(now())
@@ -94,30 +94,72 @@ model Message {
   createdAt      DateTime     @default(now())
 }
 
+// ---- Academic hierarchy: Batch -> School -> Department -> Class -> Student ----
+// Strictly linear, all scoped to one Organization, managed only by that org's Admin.
+
+model Batch {
+  id             String       @id @default(cuid())
+  name           String
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  schools School[]
+}
+
+model School {
+  id        String   @id @default(cuid())
+  name      String
+  batchId   String
+  batch     Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  departments Department[]
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  classes Class[]
+}
+
+model Class {
+  id           String     @id @default(cuid())
+  name         String
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  students      StudentProfile[]
+  examMappings  ExamMapping[]
+}
+
 model StudentProfile {
   id             String @id @default(cuid())
   userId         String @unique
   user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   registerNumber String
-  department     String
-  semester       String
+  classId        String
+  class          Class  @relation(fields: [classId], references: [id], onDelete: Restrict)
 }
 
 model Question {
-  id             String   @id @default(cuid())
-  text           String
-  subject        String
-  type           String   @default("Multiple Choice")
-  difficulty     String   @default("Medium")
-  marks          Int      @default(1)
-  options        String[]
-  correctAnswer  Int      @default(0)
-  explanation    String?
-  organizationId String?
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdAt      DateTime @default(now())
-
-  examQuestions ExamQuestion[]
+  id            String   @id @default(cuid())
+  text          String
+  subject       String
+  type          String   @default("Multiple Choice")
+  difficulty    String   @default("Medium")
+  marks         Int      @default(1)
+  options       String[]
+  correctAnswer Int      @default(0)
+  explanation   String?
+  examId        String
+  exam          Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
 }
 
 model Exam {
@@ -128,8 +170,6 @@ model Exam {
   duration         Int
   totalMarks       Int
   passingMarks     Int
-  startDate        DateTime
-  endDate          DateTime
   status           String   @default("Draft")
   shuffleQuestions Boolean  @default(false)
   shuffleOptions   Boolean  @default(false)
@@ -138,36 +178,28 @@ model Exam {
   organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   createdAt        DateTime @default(now())
 
-  examQuestions ExamQuestion[]
-  schedules     Schedule[]
-  results       Result[]
-  attempts      ExamAttempt[]
+  questions Question[]
+  mappings  ExamMapping[]
+  results   Result[]
+  attempts  ExamAttempt[]
 }
 
-model ExamQuestion {
-  id         String @id @default(cuid())
-  examId     String
-  exam       Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
-  questionId String
-  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+// Assigns an Exam to a Class with its own date/time — this is what actually
+// schedules the exam for real students. One exam can have many mappings.
+model ExamMapping {
+  id        String   @id @default(cuid())
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  date      DateTime
+  startTime String
+  endTime   String
+  hall      String   @default("Virtual")
+  status    String   @default("Scheduled")
+  createdAt DateTime @default(now())
 
-  @@unique([examId, questionId])
-}
-
-model Schedule {
-  id             String   @id @default(cuid())
-  examId         String
-  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
-  batch          String
-  department     String
-  date           DateTime
-  startTime      String
-  endTime        String
-  hall           String   @default("Virtual")
-  status         String   @default("Scheduled")
-  organizationId String?
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdAt      DateTime @default(now())
+  @@unique([examId, classId])
 }
 
 model Result {

@@ -2,10 +2,14 @@ const express = require('express');
 const { authenticate, authorize } = require('../middleware/auth');
 const ctrl = require('../controllers/exams.controller');
 const attemptCtrl = require('../controllers/examAttempts.controller');
+const questionsRouter = require('./questions.routes');
 
 const router = express.Router();
 
 router.use(authenticate);
+
+// Per-exam questions: /api/exams/:examId/questions/...
+router.use('/:examId/questions', questionsRouter);
 
 // Exam-taking flow (any authenticated user, primarily students)
 router.get('/history/me', attemptCtrl.myHistory);

@@ -13,16 +13,21 @@ const toPublic = (q) => ({
   options: q.options,
   correctAnswer: q.correctAnswer,
   explanation: q.explanation || undefined,
+  examId: q.examId,
 });
 
-const scopeWhere = (req) => {
-  if (req.user.role === 'ADMIN' && req.user.organizationId) {
-    return { organizationId: req.user.organizationId };
+// Questions now belong directly to one Exam (no shared bank). Every route here
+// is nested under /api/exams/:examId/questions, so req.params.examId is always
+// present; we still verify the exam belongs to the requesting admin's org.
+const assertOwnedExam = async (examId, organizationId) => {
+  const exam = await prisma.exam.findUnique({ where: { id: examId } });
+  if (!exam || (organizationId && exam.organizationId !== organizationId)) {
+    throw new ApiError(404, 'Exam not found');
   }
-  return {};
+  return exam;
 };
 
-const buildData = (body, req) => ({
+const buildData = (body, examId) => ({
   text: body.text,
   subject: body.subject,
   type: body.type || 'Multiple Choice',
@@ -31,40 +36,45 @@ const buildData = (body, req) => ({
   options: body.options || [],
   correctAnswer: Number(body.correctAnswer) || 0,
   explanation: body.explanation,
-  organizationId: req.user.organizationId || undefined,
+  examId,
 });
 
 const list = asyncHandler(async (req, res) => {
-  const questions = await prisma.question.findMany({
-    where: scopeWhere(req),
-    orderBy: { createdAt: 'desc' },
-  });
+  const { examId } = req.params;
+  await assertOwnedExam(examId, req.user.organizationId);
+  const questions = await prisma.question.findMany({ where: { examId }, orderBy: { createdAt: 'desc' } });
   res.json(questions.map(toPublic));
 });
 
 const create = asyncHandler(async (req, res) => {
+  const { examId } = req.params;
   const { text, subject, options } = req.body;
   if (!text || !subject || !Array.isArray(options) || options.length < 2) {
     throw new ApiError(400, 'text, subject, and at least 2 options are required');
   }
-  const question = await prisma.question.create({ data: buildData(req.body, req) });
+  await assertOwnedExam(examId, req.user.organizationId);
+  const question = await prisma.question.create({ data: buildData(req.body, examId) });
   res.status(201).json(toPublic(question));
 });
 
 const bulkCreate = asyncHandler(async (req, res) => {
+  const { examId } = req.params;
   const { questions } = req.body;
   if (!Array.isArray(questions) || questions.length === 0) {
     throw new ApiError(400, 'questions must be a non-empty array');
   }
+  await assertOwnedExam(examId, req.user.organizationId);
   const created = await prisma.$transaction(
-    questions.map((q) => prisma.question.create({ data: buildData(q, req) }))
+    questions.map((q) => prisma.question.create({ data: buildData(q, examId) }))
   );
   res.status(201).json(created.map(toPublic));
 });
 
 const update = asyncHandler(async (req, res) => {
-  const { id } = req.params;
+  const { examId, id } = req.params;
   const { text, subject, type, difficulty, marks, options, correctAnswer, explanation } = req.body;
+  await assertOwnedExam(examId, req.user.organizationId);
+
   const question = await prisma.question.update({
     where: { id },
     data: {
@@ -82,18 +92,20 @@ const update = asyncHandler(async (req, res) => {
 });
 
 const remove = asyncHandler(async (req, res) => {
-  const { id } = req.params;
+  const { examId, id } = req.params;
+  await assertOwnedExam(examId, req.user.organizationId);
   await prisma.question.delete({ where: { id } });
   res.json({ success: true });
 });
 
 const importFromFile = asyncHandler(async (req, res) => {
+  const { examId } = req.params;
   if (!req.file) throw new ApiError(400, 'No file uploaded');
-  const { subject, marks, difficulty, type } = req.body;
-  if (!subject) throw new ApiError(400, 'subject is required');
+  const exam = await assertOwnedExam(examId, req.user.organizationId);
+  const { marks, difficulty, type } = req.body;
 
   const defaults = {
-    subject,
+    subject: exam.subject,
     marks: Number(marks) || 1,
     difficulty: difficulty || 'Medium',
     type: type || 'Multiple Choice',
@@ -109,7 +121,7 @@ const importFromFile = asyncHandler(async (req, res) => {
   }
 
   const created = await prisma.$transaction(
-    questions.map((q) => prisma.question.create({ data: buildData(q, req) }))
+    questions.map((q) => prisma.question.create({ data: buildData(q, examId) }))
   );
   res.status(201).json(created.map(toPublic));
 });

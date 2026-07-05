@@ -5,10 +5,10 @@
 //
 //   SUPER_ADMIN -> anyone
 //   ADMIN       -> SUPER_ADMIN (any), ADMIN (same org), STUDENT (same org)
-//   STUDENT     -> STUDENT only, same org + department + semester ("classmates")
+//   STUDENT     -> STUDENT only, same Class ("classmates")
 //
 // `sender`/`recipient` are full User rows (with studentProfile included when role
-// is STUDENT) — org/department/semester scoping is read off them directly.
+// is STUDENT) — org scoping and classId equality are read off them directly.
 function canInitiateDirect(sender, recipient) {
   if (!sender || !recipient || sender.id === recipient.id) return false;
 
@@ -28,7 +28,7 @@ function canInitiateDirect(sender, recipient) {
     const a = sender.studentProfile;
     const b = recipient.studentProfile;
     if (!a || !b) return false;
-    return a.department === b.department && a.semester === b.semester;
+    return a.classId === b.classId;
   }
 
   return false;

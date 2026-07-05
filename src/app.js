@@ -8,13 +8,16 @@ const authRoutes = require('./routes/auth.routes');
 const organizationRoutes = require('./routes/organizations.routes');
 const adminRoutes = require('./routes/admins.routes');
 const studentRoutes = require('./routes/students.routes');
-const questionRoutes = require('./routes/questions.routes');
 const examRoutes = require('./routes/exams.routes');
-const scheduleRoutes = require('./routes/schedules.routes');
+const examMappingRoutes = require('./routes/examMappings.routes');
 const resultRoutes = require('./routes/results.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const userRoutes = require('./routes/users.routes');
 const messagingRoutes = require('./routes/messaging.routes');
+const batchRoutes = require('./routes/batches.routes');
+const schoolRoutes = require('./routes/schools.routes');
+const departmentRoutes = require('./routes/departments.routes');
+const classRoutes = require('./routes/classes.routes');
 
 const app = express();
 
@@ -40,13 +43,16 @@ app.use('/api/auth', authRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/admins', adminRoutes);
 app.use('/api/students', studentRoutes);
-app.use('/api/questions', questionRoutes);
 app.use('/api/exams', examRoutes);
-app.use('/api/schedules', scheduleRoutes);
+app.use('/api/exam-mappings', examMappingRoutes);
 app.use('/api/results', resultRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/messages', messagingRoutes);
+app.use('/api/batches', batchRoutes);
+app.use('/api/schools', schoolRoutes);
+app.use('/api/departments', departmentRoutes);
+app.use('/api/classes', classRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -32,13 +32,13 @@ const searchableUsers = asyncHandler(async (req, res) => {
       ],
     };
   } else {
-    // STUDENT: only classmates — same org, department, semester
+    // STUDENT: only classmates — same org, same Class
     if (!me.studentProfile) return res.json([]);
     candidateWhere = {
       ...candidateWhere,
       role: 'STUDENT',
       organizationId: me.organizationId,
-      studentProfile: { department: me.studentProfile.department, semester: me.studentProfile.semester },
+      studentProfile: { classId: me.studentProfile.classId },
     };
   }
 
@@ -250,4 +250,56 @@ const notifications = asyncHandler(async (req, res) => {
   res.json(items.slice(0, 30));
 });
 
-module.exports = { searchableUsers, listConversations, startConversation, getMessages, sendMessage, unreadCount, notifications };
+// Get-or-create the auto-managed announcement group for a Class, syncing
+// membership (adding any students not yet in it) and returning its id. Used by
+// Exam Mapping to notify a class's students when an exam is scheduled for them.
+async function ensureClassGroupConversation(classId, creatorUserId) {
+  const cls = await prisma.class.findUnique({ where: { id: classId } });
+  if (!cls) throw new ApiError(404, 'Class not found');
+
+  let conversation = await prisma.conversation.findUnique({ where: { classId } });
+  if (!conversation) {
+    conversation = await prisma.conversation.create({
+      data: {
+        type: 'GROUP',
+        name: `${cls.name} Announcements`,
+        classId,
+        createdById: creatorUserId,
+        participants: { create: [{ userId: creatorUserId }] },
+      },
+    });
+  }
+
+  const students = await prisma.user.findMany({
+    where: { role: 'STUDENT', studentProfile: { classId } },
+    select: { id: true },
+  });
+  const existingParticipants = await prisma.conversationParticipant.findMany({
+    where: { conversationId: conversation.id },
+    select: { userId: true },
+  });
+  const existingIds = new Set(existingParticipants.map((p) => p.userId));
+  const missing = students.filter((s) => !existingIds.has(s.id));
+  if (missing.length > 0) {
+    await prisma.conversationParticipant.createMany({
+      data: missing.map((s) => ({ conversationId: conversation.id, userId: s.id })),
+      skipDuplicates: true,
+    });
+  }
+
+  return conversation.id;
+}
+
+async function postSystemMessage(conversationId, senderId, text) {
+  const message = await prisma.message.create({ data: { conversationId, senderId, text } });
+  await prisma.conversationParticipant.update({
+    where: { conversationId_userId: { conversationId, userId: senderId } },
+    data: { lastReadAt: message.createdAt },
+  });
+  return message;
+}
+
+module.exports = {
+  searchableUsers, listConversations, startConversation, getMessages, sendMessage, unreadCount, notifications,
+  ensureClassGroupConversation, postSystemMessage,
+};
