@@ -20,13 +20,22 @@ const toPublicUser = (user) => ({
 
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) throw new ApiError(400, 'Email and password are required');
+  if (!email || !password) throw new ApiError(400, 'Identifier and password are required');
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) throw new ApiError(401, 'Invalid email or password');
+  let user = await prisma.user.findUnique({ where: { email } });
+  
+  if (!user) {
+    const studentProfile = await prisma.studentProfile.findFirst({
+      where: { registerNumber: email },
+      include: { user: true }
+    });
+    if (studentProfile) user = studentProfile.user;
+  }
+
+  if (!user) throw new ApiError(401, 'Invalid credentials');
 
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) throw new ApiError(401, 'Invalid email or password');
+  if (!valid) throw new ApiError(401, 'Invalid credentials');
 
   if (user.status !== 'Active') throw new ApiError(403, 'Your account has been deactivated');
 

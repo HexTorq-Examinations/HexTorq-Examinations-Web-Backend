@@ -36,18 +36,20 @@ const list = asyncHandler(async (req, res) => {
 
 const create = asyncHandler(async (req, res) => {
   const { name, registerNumber, department, semester, email, phone, status } = req.body;
-  if (!name || !registerNumber || !department || !semester || !email || !phone) {
+  if (!name || !registerNumber || !department || !semester || !phone) {
     throw new ApiError(400, 'Missing required student fields');
   }
 
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const finalEmail = email || `${registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.hextorq.internal`;
+
+  const existing = await prisma.user.findUnique({ where: { email: finalEmail } });
   if (existing) throw new ApiError(409, 'A user with this email already exists');
 
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
   const student = await prisma.user.create({
     data: {
       name,
-      email,
+      email: finalEmail,
       phone,
       status: status || 'Active',
       role: 'STUDENT',
@@ -70,7 +72,7 @@ const update = asyncHandler(async (req, res) => {
     where: { id },
     data: {
       name,
-      email,
+      ...(email && { email }),
       phone,
       status,
       studentProfile: {
@@ -119,24 +121,28 @@ const importFromFile = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: 'The file has errors and was not imported.', errors: dupeErrors });
   }
 
-  const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
-  const created = await prisma.$transaction(
-    students.map((s) => prisma.user.create({
-      data: {
-        name: s.name,
-        email: s.email,
-        phone: s.phone,
-        status: s.status,
-        role: 'STUDENT',
-        passwordHash,
-        organizationId: req.user.organizationId || undefined,
-        studentProfile: {
-          create: { registerNumber: s.registerNumber, department: s.department, semester: s.semester },
+  const operations = await Promise.all(
+    students.map(async (s) => {
+      const hash = await bcrypt.hash(s.password || DEFAULT_PASSWORD, 10);
+      return prisma.user.create({
+        data: {
+          name: s.name,
+          email: s.email,
+          phone: s.phone,
+          status: s.status,
+          role: 'STUDENT',
+          passwordHash: hash,
+          organizationId: req.user.organizationId || undefined,
+          studentProfile: {
+            create: { registerNumber: s.registerNumber, department: s.department, semester: s.semester },
+          },
         },
-      },
-      include: { studentProfile: true },
-    }))
+        include: { studentProfile: true },
+      });
+    })
   );
+
+  const created = await prisma.$transaction(operations);
 
   res.status(201).json(created.map(toPublic));
 });
