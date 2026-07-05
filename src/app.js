@@ -16,8 +16,15 @@ const userRoutes = require('./routes/users.routes');
 
 const app = express();
 
+// CORS_ORIGIN="*"            -> allow any origin (testing only, see .env)
+// CORS_ORIGIN="a.com,b.com"  -> allow only those origins (comma-separated)
+const corsOriginSetting = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const corsOrigin = corsOriginSetting === '*'
+  ? true
+  : corsOriginSetting.split(',').map((o) => o.trim());
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json());
