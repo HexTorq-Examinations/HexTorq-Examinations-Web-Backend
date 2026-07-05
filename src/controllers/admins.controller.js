@@ -1,7 +1,9 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const { sendAdminActivationEmail } = require('../utils/mailer');
 
 const DEFAULT_PASSWORD = 'password123';
 
@@ -43,6 +45,10 @@ const create = asyncHandler(async (req, res) => {
   if (existing) throw new ApiError(409, 'A user with this email already exists');
 
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  const resetTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+  
   const admin = await prisma.user.create({
     data: {
       name,
@@ -50,13 +56,58 @@ const create = asyncHandler(async (req, res) => {
       phone,
       employeeId: employeeId || empId,
       role: dbRole,
-      status: status || 'Active',
+      status: 'Pending',
       passwordHash,
+      resetToken,
+      resetTokenExpiry,
       organizationId: dbRole === 'ADMIN' ? organizationId : undefined,
     },
     include: { organization: true },
   });
+
+  // Attempt to send email, but don't fail the request if email sending fails
+  try {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    await sendAdminActivationEmail(admin.email, admin.name, resetToken, frontendUrl);
+  } catch (error) {
+    console.error('Failed to send activation email:', error);
+  }
+
   res.status(201).json(toPublic(admin));
+});
+
+const setPassword = asyncHandler(async (req, res) => {
+  const { email, token, newPassword } = req.body;
+  
+  if (!email || !token || !newPassword) {
+    throw new ApiError(400, 'email, token, and newPassword are required');
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { 
+      email,
+      resetToken: token,
+      resetTokenExpiry: { gt: new Date() } // Token must not be expired
+    }
+  });
+
+  if (!user) {
+    throw new ApiError(400, 'Invalid or expired activation link');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash,
+      status: 'Active',
+      resetToken: null,
+      resetTokenExpiry: null,
+    }
+  });
+
+  res.json({ success: true, message: 'Password set successfully' });
 });
 
 const update = asyncHandler(async (req, res) => {
@@ -85,4 +136,4 @@ const remove = asyncHandler(async (req, res) => {
   res.json({ success: true });
 });
 
-module.exports = { list, create, update, remove };
+module.exports = { list, create, update, remove, setPassword };

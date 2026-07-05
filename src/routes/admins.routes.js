@@ -4,6 +4,8 @@ const ctrl = require('../controllers/admins.controller');
 
 const router = express.Router();
 
+router.post('/set-password', ctrl.setPassword);
+
 router.use(authenticate, authorize('SUPER_ADMIN'));
 
 router.get('/', ctrl.list);

@@ -1,7 +1,9 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const { sendAdminActivationEmail } = require('../utils/mailer');
 
 const list = asyncHandler(async (req, res) => {
   const organizations = await prisma.organization.findMany({
@@ -29,6 +31,8 @@ const create = asyncHandler(async (req, res) => {
   if (existingUser) throw new ApiError(409, 'A user with this admin email already exists');
 
   const passwordHash = await bcrypt.hash('password123', 10);
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  const resetTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
   const org = await prisma.$transaction(async (tx) => {
     const newOrg = await tx.organization.create({
@@ -41,13 +45,22 @@ const create = asyncHandler(async (req, res) => {
         email: adminEmail,
         passwordHash,
         role: 'ADMIN',
-        status: 'Active',
+        status: 'Pending',
+        resetToken,
+        resetTokenExpiry,
         organizationId: newOrg.id,
       },
     });
 
     return newOrg;
   });
+
+  try {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    await sendAdminActivationEmail(adminEmail, `Admin - ${name}`, resetToken, frontendUrl);
+  } catch (error) {
+    console.error('Failed to send activation email:', error);
+  }
 
   res.status(201).json(org);
 });
