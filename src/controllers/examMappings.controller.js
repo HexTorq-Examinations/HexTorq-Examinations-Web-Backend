@@ -30,6 +30,9 @@ const assertOwnedExam = async (examId, organizationId) => {
 const list = asyncHandler(async (req, res) => {
   const { examId, classId } = req.query;
   const where = {};
+  if (req.user.role === 'ADMIN' && req.user.organizationId) {
+    where.exam = { organizationId: req.user.organizationId };
+  }
   if (examId) {
     await assertOwnedExam(examId, req.user.organizationId);
     where.examId = examId;
