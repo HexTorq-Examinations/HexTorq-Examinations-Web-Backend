@@ -1,6 +1,7 @@
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const { deleteStudentsInClasses } = require('./classes.controller');
 
 const toPublic = (d) => ({ id: d.id, name: d.name, schoolId: d.schoolId, createdAt: d.createdAt });
 
@@ -50,6 +51,8 @@ const update = asyncHandler(async (req, res) => {
 const remove = asyncHandler(async (req, res) => {
   const { id } = req.params;
   await assertOwnedDepartment(id, req.user.organizationId);
+  const classes = await prisma.class.findMany({ where: { departmentId: id }, select: { id: true } });
+  await deleteStudentsInClasses(classes.map((c) => c.id));
   await prisma.department.delete({ where: { id } });
   res.json({ success: true });
 });

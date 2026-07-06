@@ -11,6 +11,7 @@ router.get('/', ctrl.list);
 router.get('/template', ctrl.downloadTemplate);
 router.post('/', ctrl.create);
 router.post('/import', uploadQuestionsFile.single('file'), ctrl.importFromFile);
+router.post('/:id/password-reset', ctrl.sendPasswordReset);
 router.patch('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);
 

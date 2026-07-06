@@ -9,9 +9,18 @@ const authenticate = async (req, res, next) => {
     if (!token) throw new ApiError(401, 'Authentication token missing');
 
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (!payload.sid) throw new ApiError(401, 'Session is no longer valid');
+    const session = await prisma.refreshToken.findFirst({
+      where: { id: payload.sid, userId: payload.sub, revokedAt: null, expiresAt: { gt: new Date() } },
+      select: { id: true },
+    });
+    if (!session) throw new ApiError(401, 'Session is no longer valid');
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new ApiError(401, 'User no longer exists');
     if (user.status !== 'Active') throw new ApiError(403, 'Account is not active');
+    if (['ADMIN', 'STUDENT'].includes(user.role) && !user.organizationId) {
+      throw new ApiError(403, 'Account is not assigned to an organization');
+    }
 
     req.user = user;
     next();

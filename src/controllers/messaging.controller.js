@@ -253,13 +253,13 @@ const notifications = asyncHandler(async (req, res) => {
 // Get-or-create the auto-managed announcement group for a Class, syncing
 // membership (adding any students not yet in it) and returning its id. Used by
 // Exam Mapping to notify a class's students when an exam is scheduled for them.
-async function ensureClassGroupConversation(classId, creatorUserId) {
-  const cls = await prisma.class.findUnique({ where: { id: classId } });
+async function ensureClassGroupConversation(classId, creatorUserId, db = prisma) {
+  const cls = await db.class.findUnique({ where: { id: classId } });
   if (!cls) throw new ApiError(404, 'Class not found');
 
-  let conversation = await prisma.conversation.findUnique({ where: { classId } });
+  let conversation = await db.conversation.findUnique({ where: { classId } });
   if (!conversation) {
-    conversation = await prisma.conversation.create({
+    conversation = await db.conversation.create({
       data: {
         type: 'GROUP',
         name: `${cls.name} Announcements`,
@@ -270,11 +270,11 @@ async function ensureClassGroupConversation(classId, creatorUserId) {
     });
   }
 
-  const students = await prisma.user.findMany({
+  const students = await db.user.findMany({
     where: { role: 'STUDENT', studentProfile: { classId } },
     select: { id: true },
   });
-  const existingParticipants = await prisma.conversationParticipant.findMany({
+  const existingParticipants = await db.conversationParticipant.findMany({
     where: { conversationId: conversation.id },
     select: { userId: true },
   });
@@ -285,7 +285,7 @@ async function ensureClassGroupConversation(classId, creatorUserId) {
   const requiredParticipants = [{ id: creatorUserId }, ...students];
   const missing = requiredParticipants.filter((participant) => !existingIds.has(participant.id));
   if (missing.length > 0) {
-    await prisma.conversationParticipant.createMany({
+    await db.conversationParticipant.createMany({
       data: missing.map((s) => ({ conversationId: conversation.id, userId: s.id })),
       skipDuplicates: true,
     });
@@ -294,9 +294,9 @@ async function ensureClassGroupConversation(classId, creatorUserId) {
   return conversation.id;
 }
 
-async function postSystemMessage(conversationId, senderId, text) {
-  const message = await prisma.message.create({ data: { conversationId, senderId, text } });
-  await prisma.conversationParticipant.updateMany({
+async function postSystemMessage(conversationId, senderId, text, db = prisma) {
+  const message = await db.message.create({ data: { conversationId, senderId, text } });
+  await db.conversationParticipant.updateMany({
     where: { conversationId, userId: senderId },
     data: { lastReadAt: message.createdAt },
   });

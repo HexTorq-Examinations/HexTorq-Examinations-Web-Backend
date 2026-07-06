@@ -4,6 +4,8 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { parseStudentsWorkbook, generateTemplateBuffer } = require('../utils/studentImport');
 const { assertOwnedClass } = require('./classes.controller');
+const { createPasswordResetToken } = require('../utils/authTokens');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 
 const DEFAULT_PASSWORD = 'password123';
 
@@ -16,12 +18,29 @@ const toPublic = (u) => ({
   createdAt: u.createdAt.toISOString(),
   registerNumber: u.studentProfile?.registerNumber || '',
   classId: u.studentProfile?.classId || '',
+  extraTimeMinutes: u.studentProfile?.extraTimeMinutes || 0,
+  accessibilityNotes: u.studentProfile?.accessibilityNotes || '',
 });
+
+const classOrganizationId = (cls) => cls.department.school.batch.organizationId;
+
+const assertOwnedStudent = async (id, req) => {
+  const student = await prisma.user.findFirst({
+    where: {
+      id,
+      role: 'STUDENT',
+      ...(req.user.role === 'ADMIN' ? { organizationId: req.user.organizationId } : {}),
+    },
+    include: { studentProfile: true },
+  });
+  if (!student) throw new ApiError(404, 'Student not found');
+  return student;
+};
 
 const list = asyncHandler(async (req, res) => {
   const { classId } = req.query;
   if (!classId) throw new ApiError(400, 'classId query param is required');
-  await assertOwnedClass(classId, req.user.organizationId);
+  const cls = await assertOwnedClass(classId, req.user.organizationId);
 
   const students = await prisma.user.findMany({
     where: { role: 'STUDENT', studentProfile: { classId } },
@@ -32,7 +51,7 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, registerNumber, classId, email, phone, status, password } = req.body;
+  const { name, registerNumber, classId, email, phone, status, password, extraTimeMinutes, accessibilityNotes } = req.body;
   if (!name || !registerNumber || !classId || !phone) {
     throw new ApiError(400, 'Missing required student fields');
   }
@@ -52,9 +71,9 @@ const create = asyncHandler(async (req, res) => {
       status: status || 'Active',
       role: 'STUDENT',
       passwordHash,
-      organizationId: req.user.organizationId || undefined,
+      organizationId: classOrganizationId(cls),
       studentProfile: {
-        create: { registerNumber, classId },
+        create: { registerNumber, classId, extraTimeMinutes: Math.max(0, Number(extraTimeMinutes) || 0), accessibilityNotes: accessibilityNotes?.trim() || null },
       },
     },
     include: { studentProfile: true },
@@ -64,11 +83,12 @@ const create = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { name, registerNumber, classId, email, phone, status } = req.body;
+  const { name, registerNumber, classId, email, phone, status, extraTimeMinutes, accessibilityNotes } = req.body;
 
-  if (classId !== undefined) {
-    await assertOwnedClass(classId, req.user.organizationId);
-  }
+  await assertOwnedStudent(id, req);
+  const targetClass = classId !== undefined
+    ? await assertOwnedClass(classId, req.user.organizationId)
+    : null;
 
   const student = await prisma.user.update({
     where: { id },
@@ -77,10 +97,13 @@ const update = asyncHandler(async (req, res) => {
       ...(email && { email }),
       phone,
       status,
+      ...(targetClass ? { organizationId: classOrganizationId(targetClass) } : {}),
       studentProfile: {
         update: {
           ...(registerNumber !== undefined && { registerNumber }),
           ...(classId !== undefined && { classId }),
+          ...(extraTimeMinutes !== undefined && { extraTimeMinutes: Math.max(0, Number(extraTimeMinutes) || 0) }),
+          ...(accessibilityNotes !== undefined && { accessibilityNotes: accessibilityNotes?.trim() || null }),
         },
       },
     },
@@ -91,15 +114,31 @@ const update = asyncHandler(async (req, res) => {
 
 const remove = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  await assertOwnedStudent(id, req);
   await prisma.user.delete({ where: { id } });
   res.json({ success: true });
+});
+
+const sendPasswordReset = asyncHandler(async (req, res) => {
+  const student = await assertOwnedStudent(req.params.id, req);
+  if (!student.email || student.email.endsWith('@student.hextorq.internal')) {
+    throw new ApiError(400, 'Add a valid student email address before sending a password reset');
+  }
+  const token = await createPasswordResetToken(student.id, req.user.id);
+  await sendPasswordResetEmail(
+    student.email,
+    student.name,
+    token,
+    process.env.FRONTEND_URL || 'http://localhost:3000'
+  );
+  res.json({ success: true, message: `Password reset link sent to ${student.email}` });
 });
 
 const importFromFile = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, 'No file uploaded');
   const { classId } = req.body;
   if (!classId) throw new ApiError(400, 'classId is required');
-  await assertOwnedClass(classId, req.user.organizationId);
+  const cls = await assertOwnedClass(classId, req.user.organizationId);
 
   const { students, errors } = parseStudentsWorkbook(req.file.buffer);
 
@@ -143,7 +182,7 @@ const importFromFile = asyncHandler(async (req, res) => {
       status: s.status,
       role: 'STUDENT',
       passwordHash: hashes[i],
-      organizationId: req.user.organizationId || undefined,
+      organizationId: classOrganizationId(cls),
       studentProfile: {
         create: { registerNumber: s.registerNumber, classId },
       },
@@ -174,4 +213,4 @@ const downloadTemplate = asyncHandler(async (req, res) => {
   res.send(buffer);
 });
 
-module.exports = { list, create, update, remove, importFromFile, downloadTemplate };
+module.exports = { list, create, update, remove, sendPasswordReset, importFromFile, downloadTemplate };

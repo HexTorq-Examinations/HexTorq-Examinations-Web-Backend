@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
-router.get('/mine', ctrl.mine); // any authenticated student
+router.get('/mine', authorize('STUDENT'), ctrl.mine);
 
 router.get('/', authorize('ADMIN'), ctrl.list);
 router.post('/', authorize('ADMIN'), ctrl.create);

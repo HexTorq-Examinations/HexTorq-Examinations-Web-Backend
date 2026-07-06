@@ -21,6 +21,7 @@ model Organization {
   adminEmail String
   status     String   @default("Active")
   plan       String   @default("Basic")
+  timezone   String   @default("Asia/Kolkata")
   createdAt  DateTime @default(now())
 
   users   User[]
@@ -30,21 +31,21 @@ model Organization {
 }
 
 model User {
-  id               String    @id @default(cuid())
+  id               String        @id @default(cuid())
   name             String
-  email            String    @unique
+  email            String        @unique
   passwordHash     String
   role             Role
   phone            String?
   employeeId       String?
   avatar           String?
-  status           String    @default("Active")
+  status           String        @default("Active")
   organizationId   String?
   organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   lastLoginAt      DateTime?
   resetToken       String?
   resetTokenExpiry DateTime?
-  createdAt        DateTime  @default(now())
+  createdAt        DateTime      @default(now())
 
   studentProfile StudentProfile?
   examAttempts   ExamAttempt[]
@@ -52,6 +53,35 @@ model User {
   createdConversations Conversation[]            @relation("ConversationCreator")
   conversations        ConversationParticipant[]
   messages             Message[]
+  refreshTokens        RefreshToken[]
+  passwordResetTokens  PasswordResetToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt     DateTime
+  usedAt        DateTime?
+  requestedById String?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, usedAt])
+  @@index([expiresAt])
 }
 
 enum ConversationType {
@@ -65,7 +95,7 @@ model Conversation {
   name        String? // group name; unused for DIRECT
   classId     String?          @unique // set for the auto-managed per-Class announcement group
   createdById String
-  createdBy   User             @relation("ConversationCreator", fields: [createdById], references: [id])
+  createdBy   User             @relation("ConversationCreator", fields: [createdById], references: [id], onDelete: Cascade)
   createdAt   DateTime         @default(now())
 
   participants ConversationParticipant[]
@@ -89,7 +119,7 @@ model Message {
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   senderId       String
-  sender         User         @relation(fields: [senderId], references: [id])
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
   text           String
   createdAt      DateTime     @default(now())
 }
@@ -134,17 +164,19 @@ model Class {
   department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
   createdAt    DateTime   @default(now())
 
-  students      StudentProfile[]
-  examMappings  ExamMapping[]
+  students     StudentProfile[]
+  examMappings ExamMapping[]
 }
 
 model StudentProfile {
-  id             String @id @default(cuid())
-  userId         String @unique
-  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  registerNumber String
-  classId        String
-  class          Class  @relation(fields: [classId], references: [id], onDelete: Restrict)
+  id                 String  @id @default(cuid())
+  userId             String  @unique
+  user               User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  registerNumber     String
+  classId            String
+  class              Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  extraTimeMinutes   Int     @default(0)
+  accessibilityNotes String?
 }
 
 model Question {
@@ -162,21 +194,41 @@ model Question {
   createdAt     DateTime @default(now())
 }
 
+model ExamAnswer {
+  id             String      @id @default(cuid())
+  attemptId      String
+  attempt        ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId     String
+  selectedAnswer String
+  revision       Int         @default(1)
+  syncStatus     String      @default("SYNCED")
+  savedAt        DateTime    @updatedAt
+  createdAt      DateTime    @default(now())
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+}
+
 model Exam {
-  id               String   @id @default(cuid())
+  id               String        @id @default(cuid())
   title            String
   subject          String
   description      String?
   duration         Int
   totalMarks       Int
   passingMarks     Int
-  status           String   @default("Draft")
-  shuffleQuestions Boolean  @default(false)
-  shuffleOptions   Boolean  @default(false)
-  negativeMarking  Boolean  @default(false)
+  status           String        @default("Draft")
+  version          Int           @default(1)
+  versionGroupId   String?
+  parentExamId     String?
+  publishedAt      DateTime?
+  closedAt         DateTime?
+  shuffleQuestions Boolean       @default(false)
+  shuffleOptions   Boolean       @default(false)
+  negativeMarking  Boolean       @default(false)
   organizationId   String?
   organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdAt        DateTime @default(now())
+  createdAt        DateTime      @default(now())
 
   questions Question[]
   mappings  ExamMapping[]
@@ -187,46 +239,173 @@ model Exam {
 // Assigns an Exam to a Class with its own date/time — this is what actually
 // schedules the exam for real students. One exam can have many mappings.
 model ExamMapping {
-  id        String   @id @default(cuid())
-  examId    String
-  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
-  classId   String
-  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
-  date      DateTime
-  startTime String
-  endTime   String
-  hall      String   @default("Virtual")
-  status    String   @default("Scheduled")
-  createdAt DateTime @default(now())
+  id           String   @id @default(cuid())
+  examId       String
+  exam         Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  classId      String
+  class        Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  date         DateTime
+  startTime    String
+  endTime      String
+  timezone     String   @default("Asia/Kolkata")
+  startAt      DateTime
+  endAt        DateTime
+  hall         String   @default("Virtual")
+  status       String   @default("Scheduled")
+  graceMinutes Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@unique([examId, classId])
 }
 
+model AuditLog {
+  id             String   @id @default(cuid())
+  actorId        String
+  actorEmail     String
+  actorRole      String
+  organizationId String?
+  action         String
+  path           String
+  statusCode     Int
+  targetId       String?
+  details        Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
+
 model Result {
-  id             String    @id @default(cuid())
-  examId         String
-  exam           Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
-  totalStudents  Int       @default(0)
+  id             String        @id @default(cuid())
+  examId         String        @unique
+  exam           Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  totalStudents  Int           @default(0)
   publishedDate  DateTime?
-  status         String    @default("Pending Evaluation")
+  status         String        @default("Pending Evaluation")
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 }
 
 model ExamAttempt {
-  id         String    @id @default(cuid())
-  examId     String
-  exam       Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status     String    @default("IN_PROGRESS")
-  startedAt  DateTime  @default(now())
-  expiresAt  DateTime?
-  endedAt    DateTime?
-  score      Int       @default(0)
-  answers    Json      @default("{}")
-  violations Json      @default("[]")
-  createdAt  DateTime  @default(now())
+  id                  String    @id @default(cuid())
+  examId              String
+  exam                Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status              String    @default("IN_PROGRESS")
+  attemptNumber       Int       @default(1)
+  startedAt           DateTime  @default(now())
+  expiresAt           DateTime?
+  endedAt             DateTime?
+  score               Float     @default(0)
+  negativeMarking     Boolean   @default(false)
+  negativeMarkingRate Float     @default(0.25)
+  extensionSeconds    Int       @default(0)
+  manuallyEvaluated   Boolean   @default(false)
+  evaluationReason    String?
+  evaluatedAt         DateTime?
+  evaluatedById       String?
+  questionSnapshot    Json      @default("[]")
+  answers             Json      @default("{}")
+  violations          Json      @default("[]")
+  createdAt           DateTime  @default(now())
 
+  answerRecords         ExamAnswer[]
+  deadlineJob           AttemptDeadlineJob?
+  administrativeActions AttemptAdministrativeAction[]
+
+  @@unique([examId, userId, attemptNumber])
   @@index([status, expiresAt])
+}
+
+model WorkerHeartbeat {
+  id            String    @id
+  workerType    String
+  status        String    @default("RUNNING")
+  hostname      String?
+  processId     Int?
+  lastSeenAt    DateTime  @default(now())
+  lastJobAt     DateTime?
+  jobsProcessed Int       @default(0)
+  lastError     String?
+  startedAt     DateTime  @default(now())
+  stoppedAt     DateTime?
+
+  @@index([workerType, lastSeenAt])
+}
+
+model SystemError {
+  id             String    @id @default(cuid())
+  fingerprint    String
+  message        String
+  stack          String?
+  method         String?
+  path           String?
+  statusCode     Int
+  userId         String?
+  organizationId String?
+  occurrences    Int       @default(1)
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  @@unique([fingerprint, path])
+  @@index([organizationId, lastSeenAt])
+  @@index([resolvedAt, lastSeenAt])
+}
+
+model NotificationDelivery {
+  id                String    @id @default(cuid())
+  channel           String
+  recipient         String
+  template          String
+  status            String    @default("PENDING")
+  attempts          Int       @default(0)
+  providerMessageId String?
+  errorMessage      String?
+  organizationId    String?
+  relatedEntityType String?
+  relatedEntityId   String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([channel, recipient])
+}
+
+model AttemptAdministrativeAction {
+  id        String      @id @default(cuid())
+  attemptId String
+  attempt   ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  actorId   String
+  action    String
+  reason    String
+  details   Json?
+  createdAt DateTime    @default(now())
+
+  @@index([attemptId, createdAt])
+}
+
+model AttemptDeadlineJob {
+  id          String      @id @default(cuid())
+  attemptId   String      @unique
+  attempt     ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  runAt       DateTime
+  status      String      @default("PENDING")
+  attempts    Int         @default(0)
+  lockedAt    DateTime?
+  lockedBy    String?
+  lastError   String?
+  completedAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status, runAt])
+  @@index([status, lockedAt])
 }

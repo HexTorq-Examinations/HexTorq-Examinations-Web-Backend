@@ -1,6 +1,7 @@
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const crypto = require('crypto');
 
 const scopeWhere = (req) => {
   if (req.user.role === 'ADMIN' && req.user.organizationId) {
@@ -25,6 +26,11 @@ const toPublic = (exam) => ({
   negativeMarking: exam.negativeMarking,
   questionCount: exam._count?.questions ?? undefined,
   mappingCount: exam._count?.mappings ?? undefined,
+  version: exam.version,
+  versionGroupId: exam.versionGroupId || exam.id,
+  parentExamId: exam.parentExamId || undefined,
+  publishedAt: exam.publishedAt || undefined,
+  closedAt: exam.closedAt || undefined,
 });
 
 const list = asyncHandler(async (req, res) => {
@@ -45,6 +51,8 @@ const buildData = (body, req) => ({
   passingMarks: Number(body.passingMarks),
   // Publishing is a separate validated action; creation always starts in Draft.
   status: 'Draft',
+  version: 1,
+  versionGroupId: crypto.randomUUID(),
   shuffleQuestions: !!body.shuffleQuestions,
   shuffleOptions: !!body.shuffleOptions,
   negativeMarking: !!body.negativeMarking,
@@ -67,8 +75,26 @@ const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { title, subject, description, duration, totalMarks, passingMarks, status, shuffleQuestions, shuffleOptions, negativeMarking } = req.body;
 
-  if (status !== undefined && !['Draft', 'Published', 'Completed'].includes(status)) {
+  const currentExam = await prisma.exam.findFirst({
+    where: { id, ...scopeWhere(req) },
+    include: { _count: { select: { attempts: true, mappings: true } } },
+  });
+  if (!currentExam) throw new ApiError(404, 'Exam not found');
+
+  const hasContentChanges = [title, subject, description, duration, totalMarks, passingMarks, shuffleQuestions, shuffleOptions, negativeMarking]
+    .some((value) => value !== undefined);
+  if (hasContentChanges && (currentExam.publishedAt || currentExam.status === 'Closed' || currentExam._count.attempts > 0)) {
+    throw new ApiError(409, 'Exam rules and content are frozen after publication or the first attempt. Create a new exam version to make changes.');
+  }
+
+  if (status !== undefined && !['Draft', 'Published', 'Closed'].includes(status)) {
     throw new ApiError(400, 'Invalid exam status');
+  }
+  if (currentExam.status === 'Closed' && status !== undefined && status !== 'Closed') {
+    throw new ApiError(409, 'A closed exam cannot be reopened. Create a new exam version instead.');
+  }
+  if (currentExam.status === 'Published' && status === 'Draft' && currentExam._count.attempts > 0) {
+    throw new ApiError(409, 'An attempted exam cannot be unpublished. Close it or create a new version.');
   }
 
   if (status === 'Published') {
@@ -98,6 +124,8 @@ const update = asyncHandler(async (req, res) => {
       totalMarks: totalMarks !== undefined ? Number(totalMarks) : undefined,
       passingMarks: passingMarks !== undefined ? Number(passingMarks) : undefined,
       status,
+      publishedAt: status === 'Published' && !currentExam.publishedAt ? new Date() : undefined,
+      closedAt: status === 'Closed' ? new Date() : undefined,
       shuffleQuestions,
       shuffleOptions,
       negativeMarking,
@@ -109,8 +137,60 @@ const update = asyncHandler(async (req, res) => {
 
 const remove = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const exam = await prisma.exam.findFirst({
+    where: { id, ...scopeWhere(req) },
+    include: { _count: { select: { attempts: true } } },
+  });
+  if (!exam) throw new ApiError(404, 'Exam not found');
+  if (exam.publishedAt || exam.status === 'Closed' || exam._count.attempts > 0) {
+    throw new ApiError(409, 'Published or attempted exams cannot be deleted because their audit history is immutable.');
+  }
   await prisma.exam.delete({ where: { id } });
   res.json({ success: true });
 });
 
-module.exports = { list, create, update, remove };
+const preview = asyncHandler(async (req, res) => {
+  const exam = await prisma.exam.findFirst({
+    where: { id: req.params.id, ...scopeWhere(req) },
+    include: { questions: { orderBy: { createdAt: 'asc' } }, _count: { select: { questions: true, mappings: true } } },
+  });
+  if (!exam) throw new ApiError(404, 'Exam not found');
+  res.json({ ...toPublic(exam), questions: exam.questions });
+});
+
+const duplicate = asyncHandler(async (req, res) => {
+  const source = await prisma.exam.findFirst({
+    where: { id: req.params.id, ...scopeWhere(req) },
+    include: { questions: true },
+  });
+  if (!source) throw new ApiError(404, 'Exam not found');
+  const versionGroupId = source.versionGroupId || source.id;
+  const latest = await prisma.exam.aggregate({ where: { versionGroupId }, _max: { version: true } });
+  const copy = await prisma.exam.create({
+    data: {
+      title: req.body.title || `${source.title} v${(latest._max.version || source.version) + 1}`,
+      subject: source.subject,
+      description: source.description,
+      duration: source.duration,
+      totalMarks: source.totalMarks,
+      passingMarks: source.passingMarks,
+      status: 'Draft',
+      version: (latest._max.version || source.version) + 1,
+      versionGroupId,
+      parentExamId: source.id,
+      shuffleQuestions: source.shuffleQuestions,
+      shuffleOptions: source.shuffleOptions,
+      negativeMarking: source.negativeMarking,
+      organizationId: source.organizationId,
+      questions: {
+        create: source.questions.map(({ text, subject, type, difficulty, marks, options, correctAnswer, explanation }) => ({
+          text, subject, type, difficulty, marks, options, correctAnswer, explanation,
+        })),
+      },
+    },
+    include: { _count: { select: { questions: true, mappings: true } } },
+  });
+  res.status(201).json(toPublic(copy));
+});
+
+module.exports = { list, create, update, remove, preview, duplicate };

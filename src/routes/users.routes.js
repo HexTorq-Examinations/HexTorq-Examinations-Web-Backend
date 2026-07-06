@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
+router.get('/me/profile', ctrl.getMyProfile);
 router.patch('/me', ctrl.updateMe);
 router.post('/me/password', ctrl.changePassword);
 router.post('/me/avatar', uploadAvatar.single('avatar'), ctrl.uploadAvatar);

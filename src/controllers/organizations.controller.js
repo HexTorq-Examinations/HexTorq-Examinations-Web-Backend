@@ -4,6 +4,13 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { sendAdminActivationEmail } = require('../utils/mailer');
+const { DateTime } = require('luxon');
+
+const validateTimezone = (timezone) => {
+  const value = timezone || 'Asia/Kolkata';
+  if (!DateTime.now().setZone(value).isValid) throw new ApiError(400, 'Invalid IANA timezone');
+  return value;
+};
 
 const list = asyncHandler(async (req, res) => {
   const organizations = await prisma.organization.findMany({
@@ -18,13 +25,14 @@ const list = asyncHandler(async (req, res) => {
     adminEmail: o.adminEmail,
     status: o.status,
     plan: o.plan,
+    timezone: o.timezone,
     studentsCount: o._count.users,
     createdAt: o.createdAt,
   })));
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { name, code, domain, adminEmail, status, plan, frontendUrl } = req.body;
+  const { name, code, domain, adminEmail, status, plan, timezone, frontendUrl } = req.body;
   if (!name || !code || !adminEmail) {
     throw new ApiError(400, 'name, code, and adminEmail are required');
   }
@@ -37,7 +45,7 @@ const create = asyncHandler(async (req, res) => {
 
   const org = await prisma.$transaction(async (tx) => {
     const newOrg = await tx.organization.create({
-      data: { name, code, domain, adminEmail, status: status || 'Active', plan: plan || 'Basic' },
+      data: { name, code, domain, adminEmail, status: status || 'Active', plan: plan || 'Basic', timezone: validateTimezone(timezone) },
     });
 
     await tx.user.create({
@@ -68,10 +76,10 @@ const create = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { name, code, domain, adminEmail, status, plan } = req.body;
+  const { name, code, domain, adminEmail, status, plan, timezone } = req.body;
   const org = await prisma.organization.update({
     where: { id },
-    data: { name, code, domain, adminEmail, status, plan },
+    data: { name, code, domain, adminEmail, status, plan, timezone: timezone !== undefined ? validateTimezone(timezone) : undefined },
   });
   res.json(org);
 });

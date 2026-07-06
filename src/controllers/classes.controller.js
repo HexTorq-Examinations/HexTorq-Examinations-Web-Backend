@@ -15,7 +15,7 @@ const assertOwnedDepartment = async (departmentId, organizationId) => {
     where: { id: departmentId },
     include: { school: { include: { batch: true } } },
   });
-  if (!department || department.school.batch.organizationId !== organizationId) {
+  if (!department || (organizationId && department.school.batch.organizationId !== organizationId)) {
     throw new ApiError(404, 'Department not found');
   }
   return department;
@@ -48,7 +48,7 @@ const assertOwnedClass = async (id, organizationId) => {
     where: { id },
     include: { department: { include: { school: { include: { batch: true } } } } },
   });
-  if (!cls || cls.department.school.batch.organizationId !== organizationId) {
+  if (!cls || (organizationId && cls.department.school.batch.organizationId !== organizationId)) {
     throw new ApiError(404, 'Class not found');
   }
   return cls;
@@ -62,11 +62,27 @@ const update = asyncHandler(async (req, res) => {
   res.json(toPublic(cls));
 });
 
+// Deleting a Class cascades to StudentProfile at the DB level, but that only
+// removes the profile row — the student's User (login) account would be left
+// behind with no profile. Delete the User explicitly first; deleting User
+// cascades to StudentProfile (and everything else keyed off it) on its own.
+const deleteStudentsInClasses = async (classIds) => {
+  if (classIds.length === 0) return;
+  const students = await prisma.user.findMany({
+    where: { role: 'STUDENT', studentProfile: { classId: { in: classIds } } },
+    select: { id: true },
+  });
+  if (students.length > 0) {
+    await prisma.user.deleteMany({ where: { id: { in: students.map((s) => s.id) } } });
+  }
+};
+
 const remove = asyncHandler(async (req, res) => {
   const { id } = req.params;
   await assertOwnedClass(id, req.user.organizationId);
+  await deleteStudentsInClasses([id]);
   await prisma.class.delete({ where: { id } });
   res.json({ success: true });
 });
 
-module.exports = { list, create, update, remove, assertOwnedClass };
+module.exports = { list, create, update, remove, assertOwnedClass, deleteStudentsInClasses };

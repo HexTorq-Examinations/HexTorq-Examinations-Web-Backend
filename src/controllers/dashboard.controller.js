@@ -1,5 +1,17 @@
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
+const ApiError = require('../utils/ApiError');
+
+const assertDashboardScope = async (req, batchId) => {
+  if (req.user.role !== 'ADMIN') return;
+  if (!req.user.organizationId) throw new ApiError(403, 'Admin account is not assigned to an organization');
+  if (!batchId) return;
+  const batch = await prisma.batch.findFirst({
+    where: { id: batchId, organizationId: req.user.organizationId },
+    select: { id: true },
+  });
+  if (!batch) throw new ApiError(404, 'Batch not found');
+};
 
 // Students hang off Batch via Class -> Department -> School -> Batch; Exams have no
 // direct batch link, so they're scoped by "has been mapped to a class in this batch"
@@ -36,14 +48,15 @@ const superAdminStats = asyncHandler(async (req, res) => {
 });
 
 const adminStats = asyncHandler(async (req, res) => {
-  const orgFilter = req.user.organizationId ? { organizationId: req.user.organizationId } : {};
   const { batchId } = req.query;
+  await assertDashboardScope(req, batchId);
+  const orgFilter = req.user.organizationId ? { organizationId: req.user.organizationId } : {};
   const attemptUserFilter = batchId ? { user: studentBatchWhere(batchId) } : {};
   const [totalStudents, activeExams, totalExams, publishedResults, totalAttempts] = await Promise.all([
     prisma.user.count({ where: { role: 'STUDENT', ...orgFilter, ...studentBatchWhere(batchId) } }),
     prisma.exam.count({ where: { status: 'Published', ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.exam.count({ where: { ...orgFilter, ...examBatchWhere(batchId) } }),
-    prisma.result.count({ where: { ...orgFilter, status: 'Published', exam: examBatchWhere(batchId) } }),
+    prisma.result.count({ where: { status: 'Published', exam: { ...orgFilter, ...examBatchWhere(batchId) } } }),
     prisma.examAttempt.count({ where: { exam: orgFilter, ...attemptUserFilter, status: { in: ['COMPLETED', 'TERMINATED'] } } }),
   ]);
   res.json({ totalStudents, activeExams, totalExams, publishedResults, totalAttempts, ...(await hierarchyCounts(orgFilter, batchId)) });
@@ -51,7 +64,7 @@ const adminStats = asyncHandler(async (req, res) => {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const STATUS_COLORS = {
-  Completed: '#10b981',
+  Closed: '#10b981',
   Published: '#3b82f6',
   Draft: '#94a3b8',
   Scheduled: '#8b5cf6',
@@ -67,6 +80,7 @@ const getOverview = asyncHandler(async (req, res) => {
   const isScoped = req.user.role === 'ADMIN' && req.user.organizationId;
   const orgFilter = isScoped ? { organizationId: req.user.organizationId } : {};
   const { batchId } = req.query;
+  await assertDashboardScope(req, batchId);
   const examOrgFilter = { ...orgFilter, ...examBatchWhere(batchId) };
   const studentOrgFilter = { ...orgFilter, ...studentBatchWhere(batchId) };
   const attemptUserFilter = batchId ? { user: studentBatchWhere(batchId) } : {};
@@ -157,7 +171,7 @@ const getOverview = asyncHandler(async (req, res) => {
   // ---- Recent activity: merge the last few real events across a handful of tables ----
   const [recentExams, recentResults, recentStudents, recentQuestions] = await Promise.all([
     prisma.exam.findMany({ where: examOrgFilter, orderBy: { createdAt: 'desc' }, take: 5, select: { title: true, createdAt: true } }),
-    prisma.result.findMany({ where: { ...orgFilter, status: 'Published', exam: examBatchWhere(batchId) }, orderBy: { publishedDate: 'desc' }, take: 5, include: { exam: { select: { title: true } } } }),
+    prisma.result.findMany({ where: { status: 'Published', exam: { ...orgFilter, ...examBatchWhere(batchId) } }, orderBy: { publishedDate: 'desc' }, take: 5, include: { exam: { select: { title: true } } } }),
     prisma.user.findMany({ where: { role: 'STUDENT', ...studentOrgFilter }, orderBy: { createdAt: 'desc' }, take: 5, select: { name: true, createdAt: true } }),
     prisma.question.findMany({ where: { exam: examOrgFilter }, orderBy: { createdAt: 'desc' }, take: 5, select: { subject: true, createdAt: true } }),
   ]);
@@ -175,24 +189,24 @@ const getOverview = asyncHandler(async (req, res) => {
   // ---- Upcoming exams: real, scoped, next 3, sourced from Exam Mappings ----
   const upcomingMappings = await prisma.examMapping.findMany({
     where: {
-      date: { gt: now },
+      startAt: { gt: now },
       ...(isScoped ? { exam: { organizationId: req.user.organizationId } } : {}),
       ...(batchId ? { class: { department: { school: { batchId } } } } : {}),
     },
     include: { exam: true, class: { include: { _count: { select: { students: true } } } } },
-    orderBy: { date: 'asc' },
+    orderBy: { startAt: 'asc' },
     take: 3,
   });
   const upcomingExams = upcomingMappings.map((m) => ({
     name: `${m.exam.title} (${m.class.name})`,
-    time: m.date.toISOString(),
+    time: m.startAt.toISOString(),
     enrolled: m.class._count.students,
   }));
 
   // ---- Pending tasks: real, actionable, computed from current state ----
   const [draftExamsNoQuestions, pendingResults, pendingAdmins] = await Promise.all([
     prisma.exam.count({ where: { ...examOrgFilter, status: 'Draft', questions: { none: {} } } }),
-    prisma.result.count({ where: { ...orgFilter, status: 'Pending Evaluation', exam: examBatchWhere(batchId) } }),
+    prisma.result.count({ where: { status: 'Pending Evaluation', exam: { ...orgFilter, ...examBatchWhere(batchId) } } }),
     isScoped ? 0 : prisma.user.count({ where: { role: 'ADMIN', status: 'Pending' } }),
   ]);
   const pendingTasks = [

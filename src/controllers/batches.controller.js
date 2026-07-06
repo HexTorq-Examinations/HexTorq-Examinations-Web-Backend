@@ -1,6 +1,7 @@
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const { deleteStudentsInClasses } = require('./classes.controller');
 
 const toPublic = (b) => ({ id: b.id, name: b.name, createdAt: b.createdAt });
 
@@ -40,6 +41,8 @@ const remove = asyncHandler(async (req, res) => {
   if (!existing || existing.organizationId !== req.user.organizationId) {
     throw new ApiError(404, 'Batch not found');
   }
+  const classes = await prisma.class.findMany({ where: { department: { school: { batchId: id } } }, select: { id: true } });
+  await deleteStudentsInClasses(classes.map((c) => c.id));
   await prisma.batch.delete({ where: { id } });
   res.json({ success: true });
 });
