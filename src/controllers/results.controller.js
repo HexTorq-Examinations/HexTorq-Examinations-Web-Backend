@@ -16,6 +16,7 @@ const toPublic = (r) => ({
   id: r.id,
   examId: r.examId,
   examName: r.exam?.title,
+  isTestExam: !!r.exam?.isTestExam,
   totalStudents: r.totalStudents,
   publishedDate: r.publishedDate ? r.publishedDate.toISOString().split('T')[0] : '',
   status: r.status,
@@ -257,6 +258,35 @@ const attemptPdf = asyncHandler(async (req, res) => {
   doc.end();
 });
 
+const attemptResponsePdf = asyncHandler(async (req, res) => {
+  const attempt = await loadOwnedAttempt(req.params.id, req);
+  const answers = Object.fromEntries(attempt.answerRecords.map((answer) => [answer.questionId, answer.selectedAnswer]));
+  const snapshot = Array.isArray(attempt.questionSnapshot) ? attempt.questionSnapshot : [];
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="response-${attempt.user.studentProfile?.registerNumber || attempt.userId}-${attempt.id}.pdf"`);
+  const doc = new PDFDocument({ margin: 42, size: 'A4' });
+  doc.pipe(res);
+  doc.fontSize(19).text('HexTorq Examination Response', { align: 'center' }).moveDown(0.5);
+  doc.fontSize(10).fillColor('#475569').text(`Attempt ID: ${attempt.id}`, { align: 'center' }).moveDown();
+  doc.fillColor('#111827').fontSize(11);
+  doc.text(`Student: ${attempt.user.name}`);
+  doc.text(`Register Number: ${attempt.user.studentProfile?.registerNumber || '-'}`);
+  doc.text(`Exam: ${attempt.exam.title}`);
+  doc.text(`Score: ${attempt.score} / ${attempt.exam.totalMarks}    Status: ${attempt.status}`);
+  doc.text(`Started: ${attempt.startedAt.toISOString()}    Submitted: ${attempt.endedAt?.toISOString() || '-'}`).moveDown();
+  snapshot.forEach((question, index) => {
+    if (doc.y > 690) doc.addPage();
+    const selected = answers[question.id] ?? attempt.answers?.[question.id] ?? 'Unanswered';
+    doc.fontSize(11).fillColor('#111827').text(`${index + 1}. ${question.text}`, { continued: false });
+    doc.fontSize(9).fillColor('#475569').text(`Marks: ${question.marks}`);
+    (question.options || []).forEach((option, optionIndex) => doc.text(`   ${String.fromCharCode(65 + optionIndex)}. ${option}`));
+    doc.moveDown(0.25).fillColor(selected === question.correctAnswer ? '#047857' : '#b91c1c').text(`Student answer: ${selected}`);
+    doc.fillColor('#047857').text(`Correct answer: ${question.correctAnswer}`).moveDown();
+  });
+  if (!snapshot.length) doc.text('No frozen questions were available for this attempt.');
+  doc.end();
+});
+
 const GRADE_BUCKETS = [
   { name: 'Distinction', color: '#10b981', min: 75 },
   { name: 'First Class', color: '#3b82f6', min: 60 },
@@ -328,4 +358,4 @@ const analytics = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { list, publish, analytics, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf };
+module.exports = { list, publish, analytics, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };

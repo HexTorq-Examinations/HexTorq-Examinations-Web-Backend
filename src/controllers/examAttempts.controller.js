@@ -266,6 +266,8 @@ const startAttempt = asyncHandler(async (req, res) => {
         expiresAt,
         negativeMarking: exam.negativeMarking,
         negativeMarkingRate: 0.25,
+        maxViolations: exam.maxViolations,
+        calculatorEnabled: exam.calculatorEnabled,
         questionSnapshot,
         answers: {},
         violations: [],
@@ -307,6 +309,8 @@ const startAttempt = asyncHandler(async (req, res) => {
     startedAt: attempt.startedAt.toISOString(),
     expiresAt: attempt.expiresAt.toISOString(),
     durationSeconds: Math.max(0, Math.ceil((attempt.expiresAt.getTime() - Date.now()) / 1000)),
+    maxViolations: attempt.maxViolations,
+    calculatorEnabled: attempt.calculatorEnabled,
   });
 });
 
@@ -379,9 +383,6 @@ const saveAnswer = asyncHandler(async (req, res) => {
   });
 });
 
-// Warnings 1-5 are allowed; the 6th violation (count > MAX_VIOLATIONS) auto-terminates the attempt.
-const MAX_VIOLATIONS = 5;
-
 const recordViolation = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { type, description, clientViolationId } = req.body;
@@ -420,7 +421,7 @@ const recordViolation = asyncHandler(async (req, res) => {
     description,
   }];
 
-  const shouldTerminate = violations.length > MAX_VIOLATIONS;
+  const shouldTerminate = violations.length >= attempt.maxViolations;
 
   const updated = await prisma.examAttempt.update({
     where: { id: attempt.id },

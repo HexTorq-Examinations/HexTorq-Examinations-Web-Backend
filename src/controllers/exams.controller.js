@@ -24,6 +24,9 @@ const toPublic = (exam) => ({
   shuffleQuestions: exam.shuffleQuestions,
   shuffleOptions: exam.shuffleOptions,
   negativeMarking: exam.negativeMarking,
+  maxViolations: exam.maxViolations,
+  calculatorEnabled: exam.calculatorEnabled,
+  isTestExam: exam.isTestExam,
   questionCount: exam._count?.questions ?? undefined,
   mappingCount: exam._count?.mappings ?? undefined,
   version: exam.version,
@@ -56,6 +59,9 @@ const buildData = (body, req) => ({
   shuffleQuestions: !!body.shuffleQuestions,
   shuffleOptions: !!body.shuffleOptions,
   negativeMarking: !!body.negativeMarking,
+  maxViolations: Math.min(50, Math.max(1, Number(body.maxViolations) || 5)),
+  calculatorEnabled: !!body.calculatorEnabled,
+  isTestExam: !!body.isTestExam,
   organizationId: req.user.organizationId || undefined,
 });
 
@@ -73,7 +79,7 @@ const create = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { title, subject, description, duration, totalMarks, passingMarks, status, shuffleQuestions, shuffleOptions, negativeMarking } = req.body;
+  const { title, subject, description, duration, totalMarks, passingMarks, status, shuffleQuestions, shuffleOptions, negativeMarking, maxViolations, calculatorEnabled, isTestExam } = req.body;
 
   const currentExam = await prisma.exam.findFirst({
     where: { id, ...scopeWhere(req) },
@@ -81,7 +87,7 @@ const update = asyncHandler(async (req, res) => {
   });
   if (!currentExam) throw new ApiError(404, 'Exam not found');
 
-  const hasContentChanges = [title, subject, description, duration, totalMarks, passingMarks, shuffleQuestions, shuffleOptions, negativeMarking]
+  const hasContentChanges = [title, subject, description, duration, totalMarks, passingMarks, shuffleQuestions, shuffleOptions, negativeMarking, maxViolations, calculatorEnabled, isTestExam]
     .some((value) => value !== undefined);
   if (hasContentChanges && (currentExam.publishedAt || currentExam.status === 'Closed' || currentExam._count.attempts > 0)) {
     throw new ApiError(409, 'Exam rules and content are frozen after publication or the first attempt. Create a new exam version to make changes.');
@@ -129,6 +135,9 @@ const update = asyncHandler(async (req, res) => {
       shuffleQuestions,
       shuffleOptions,
       negativeMarking,
+      maxViolations: maxViolations !== undefined ? Math.min(50, Math.max(1, Number(maxViolations) || 5)) : undefined,
+      calculatorEnabled,
+      isTestExam,
     },
     include: { _count: { select: { questions: true, mappings: true } } },
   });
@@ -181,6 +190,9 @@ const duplicate = asyncHandler(async (req, res) => {
       shuffleQuestions: source.shuffleQuestions,
       shuffleOptions: source.shuffleOptions,
       negativeMarking: source.negativeMarking,
+      maxViolations: source.maxViolations,
+      calculatorEnabled: source.calculatorEnabled,
+      isTestExam: source.isTestExam,
       organizationId: source.organizationId,
       questions: {
         create: source.questions.map(({ text, subject, type, difficulty, marks, options, correctAnswer, explanation }) => ({

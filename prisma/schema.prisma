@@ -210,25 +210,28 @@ model ExamAnswer {
 }
 
 model Exam {
-  id               String        @id @default(cuid())
-  title            String
-  subject          String
-  description      String?
-  duration         Int
-  totalMarks       Int
-  passingMarks     Int
-  status           String        @default("Draft")
-  version          Int           @default(1)
-  versionGroupId   String?
-  parentExamId     String?
-  publishedAt      DateTime?
-  closedAt         DateTime?
-  shuffleQuestions Boolean       @default(false)
-  shuffleOptions   Boolean       @default(false)
-  negativeMarking  Boolean       @default(false)
-  organizationId   String?
-  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdAt        DateTime      @default(now())
+  id                String        @id @default(cuid())
+  title             String
+  subject           String
+  description       String?
+  duration          Int
+  totalMarks        Int
+  passingMarks      Int
+  status            String        @default("Draft")
+  version           Int           @default(1)
+  versionGroupId    String?
+  parentExamId      String?
+  publishedAt       DateTime?
+  closedAt          DateTime?
+  shuffleQuestions  Boolean       @default(false)
+  shuffleOptions    Boolean       @default(false)
+  negativeMarking   Boolean       @default(false)
+  maxViolations     Int           @default(5)
+  calculatorEnabled Boolean       @default(false)
+  isTestExam        Boolean       @default(false)
+  organizationId    String?
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt         DateTime      @default(now())
 
   questions Question[]
   mappings  ExamMapping[]
@@ -303,6 +306,8 @@ model ExamAttempt {
   score               Float     @default(0)
   negativeMarking     Boolean   @default(false)
   negativeMarkingRate Float     @default(0.25)
+  maxViolations       Int       @default(5)
+  calculatorEnabled   Boolean   @default(false)
   extensionSeconds    Int       @default(0)
   manuallyEvaluated   Boolean   @default(false)
   evaluationReason    String?
