@@ -8,6 +8,10 @@ const toPublic = (m) => ({
   id: m.id,
   examId: m.examId,
   examTitle: m.exam?.title,
+  examSubject: m.exam?.subject,
+  examDuration: m.exam?.duration,
+  examTotalMarks: m.exam?.totalMarks,
+  examQuestionCount: m.exam?._count?.questions ?? 0,
   classId: m.classId,
   className: m.class?.name,
   date: m.date.toISOString().split('T')[0],
@@ -44,7 +48,7 @@ const list = asyncHandler(async (req, res) => {
 
   const mappings = await prisma.examMapping.findMany({
     where,
-    include: { exam: true, class: true },
+    include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
     orderBy: { date: 'asc' },
   });
   res.json(mappings.map(toPublic));
@@ -63,7 +67,7 @@ const create = asyncHandler(async (req, res) => {
     where: { examId_classId: { examId, classId } },
     update: { date: new Date(date), startTime, endTime, hall: hall || 'Virtual', status: status || 'Scheduled' },
     create: { examId, classId, date: new Date(date), startTime, endTime, hall: hall || 'Virtual', status: status || 'Scheduled' },
-    include: { exam: true, class: true },
+    include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
   });
 
   // Notify the class: get-or-create their announcement group and post the mapping.
@@ -99,7 +103,7 @@ const update = asyncHandler(async (req, res) => {
       hall,
       status,
     },
-    include: { exam: true, class: true },
+    include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
   });
   res.json(toPublic(mapping));
 });
@@ -118,7 +122,7 @@ const mine = asyncHandler(async (req, res) => {
 
   const mappings = await prisma.examMapping.findMany({
     where: { classId: profile.classId },
-    include: { exam: true, class: true },
+    include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
     orderBy: { date: 'asc' },
   });
   res.json(mappings.map(toPublic));
