@@ -274,6 +274,13 @@ const attemptResponsePdf = asyncHandler(async (req, res) => {
   doc.text(`Exam: ${attempt.exam.title}`);
   doc.text(`Score: ${attempt.score} / ${attempt.exam.totalMarks}    Status: ${attempt.status}`);
   doc.text(`Started: ${attempt.startedAt.toISOString()}    Submitted: ${attempt.endedAt?.toISOString() || '-'}`).moveDown();
+  const violations = Array.isArray(attempt.violations) ? attempt.violations : [];
+  doc.fontSize(12).fillColor('#111827').text(`Violations: ${violations.length}`);
+  violations.forEach((violation, index) => {
+    const at = violation.timestamp ? new Date(violation.timestamp).toISOString() : 'Time unavailable';
+    doc.fontSize(9).fillColor('#b45309').text(`${index + 1}. ${violation.type || 'VIOLATION'} — ${violation.description || 'No reason recorded'} (${at})`);
+  });
+  doc.moveDown();
   snapshot.forEach((question, index) => {
     if (doc.y > 690) doc.addPage();
     const selected = answers[question.id] ?? attempt.answers?.[question.id] ?? 'Unanswered';

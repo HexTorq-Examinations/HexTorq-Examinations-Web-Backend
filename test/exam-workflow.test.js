@@ -36,7 +36,9 @@ test('exam delivery settings are frozen onto each attempt', () => {
   assert.match(schema, /isTestExam\s+Boolean\s+@default\(false\)/);
   assert.match(exams, /maxViolations: Math\.min\(50/);
   assert.match(attempts, /maxViolations: exam\.maxViolations/);
-  assert.match(attempts, /violations\.length >= attempt\.maxViolations/);
+  assert.match(attempts, /violations\.length >= locked\.maxViolations/);
+  assert.match(attempts, /completeFinalizingAttempt\(recorded\.attempt\.id, 'TERMINATED'/);
+  assert.match(attempts, /status: 'FINALIZING'/);
 });
 
 test('attempt response PDF uses the owned frozen attempt', () => {

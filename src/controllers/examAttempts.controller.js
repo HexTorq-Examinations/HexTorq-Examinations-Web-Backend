@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { scoreAttemptSnapshot } = require('../utils/scoring');
 const PDFDocument = require('pdfkit');
+const crypto = require('crypto');
 
 // Unbiased Fisher-Yates shuffle. Never mutates the input array.
 const shuffle = (arr) => {
@@ -70,23 +71,28 @@ const ensurePendingResult = async (examId) => {
 
 // Finalization is server-owned and conditional, so a worker, a client submit, and
 // a last-second request can race without completing/scoring the same attempt twice.
+const completeFinalizingAttempt = async (attemptId, finalStatus, endedAt) => {
+  let frozenAttempt = await prisma.examAttempt.findUnique({ where: { id: attemptId } });
+  if (!frozenAttempt || frozenAttempt.status !== 'FINALIZING') return frozenAttempt;
+  // Read answers only after claiming the attempt. No answer endpoint accepts the
+  // FINALIZING state, so this is a stable server-side snapshot for scoring.
+  const score = await calculateScore(frozenAttempt);
+  const completed = await prisma.examAttempt.updateMany({
+    where: { id: attemptId, status: 'FINALIZING' },
+    data: { status: finalStatus, endedAt, score },
+  });
+  if (completed.count > 0) await ensurePendingResult(frozenAttempt.examId);
+  return prisma.examAttempt.findUnique({ where: { id: attemptId } });
+};
+
 const finalizeAttempt = async (attempt, finalStatus = 'COMPLETED', endedAt = new Date()) => {
   const claimed = await prisma.examAttempt.updateMany({
     where: { id: attempt.id, status: 'IN_PROGRESS' },
     data: { status: 'FINALIZING', endedAt },
   });
-  let frozenAttempt = await prisma.examAttempt.findUnique({ where: { id: attempt.id } });
-  if (!frozenAttempt || (claimed.count === 0 && frozenAttempt.status !== 'FINALIZING')) return frozenAttempt;
-
-  // Read answers only after claiming the attempt. No answer endpoint accepts the
-  // FINALIZING state, so this is a stable server-side snapshot for scoring.
-  const score = await calculateScore(frozenAttempt);
-  const completed = await prisma.examAttempt.updateMany({
-    where: { id: attempt.id, status: 'FINALIZING' },
-    data: { status: finalStatus, endedAt, score },
-  });
-  if (completed.count > 0) await ensurePendingResult(frozenAttempt.examId);
-  return prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+  const current = await prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+  if (!current || (claimed.count === 0 && current.status !== 'FINALIZING')) return current;
+  return completeFinalizingAttempt(attempt.id, finalStatus, endedAt);
 };
 
 const claimDeadlineJobs = async (workerId, batchSize = 25) => {
@@ -407,31 +413,36 @@ const recordViolation = asyncHandler(async (req, res) => {
     return res.json({ violations: attempt.violations || [], status: 'COMPLETED' });
   }
 
-  const existing = attempt.violations || [];
-  // Idempotent: a retried request with the same client-generated id is a no-op.
-  if (clientViolationId && existing.some((v) => v.clientViolationId === clientViolationId)) {
-    return res.json({ violations: existing, status: attempt.status });
-  }
-
-  const violations = [...existing, {
-    id: Math.random().toString(36).slice(2),
-    clientViolationId,
-    timestamp: Date.now(),
-    type,
-    description,
-  }];
-
-  const shouldTerminate = violations.length >= attempt.maxViolations;
-
-  const updated = await prisma.examAttempt.update({
-    where: { id: attempt.id },
-    data: {
-      violations,
-      ...(shouldTerminate ? { status: 'TERMINATED', endedAt: new Date() } : {}),
-    },
+  const endedAt = new Date();
+  const recorded = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "ExamAttempt" WHERE "id" = ${attempt.id} FOR UPDATE`;
+    const locked = await tx.examAttempt.findUnique({ where: { id: attempt.id } });
+    if (!locked || locked.status !== 'IN_PROGRESS') return { attempt: locked, duplicate: false, shouldTerminate: false };
+    const existing = Array.isArray(locked.violations) ? locked.violations : [];
+    if (clientViolationId && existing.some((violation) => violation.clientViolationId === clientViolationId)) {
+      return { attempt: locked, duplicate: true, shouldTerminate: false };
+    }
+    const violations = [...existing, {
+      id: crypto.randomUUID(),
+      clientViolationId,
+      timestamp: endedAt.getTime(),
+      type,
+      description: String(description || type),
+    }];
+    const shouldTerminate = violations.length >= locked.maxViolations;
+    const updated = await tx.examAttempt.update({
+      where: { id: locked.id },
+      data: { violations, ...(shouldTerminate ? { status: 'FINALIZING', endedAt } : {}) },
+    });
+    return { attempt: updated, duplicate: false, shouldTerminate };
   });
 
-  res.json({ violations: updated.violations, status: updated.status });
+  if (!recorded.attempt) throw new ApiError(404, 'No attempt found for this exam');
+  if (recorded.shouldTerminate) {
+    const finalized = await completeFinalizingAttempt(recorded.attempt.id, 'TERMINATED', endedAt);
+    return res.json({ violations: finalized.violations, status: finalized.status, score: finalized.score });
+  }
+  res.json({ violations: recorded.attempt.violations, status: recorded.attempt.status });
 });
 
 const submitAttempt = asyncHandler(async (req, res) => {
