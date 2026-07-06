@@ -20,6 +20,13 @@ test('student update and delete require owned-student lookup', () => {
   assert.match(students, /organizationId: req\.user\.organizationId/);
 });
 
+test('manual student creation uses the validated owned class', () => {
+  const students = source('src/controllers/students.controller.js');
+  const createBlock = students.slice(students.indexOf('const create ='), students.indexOf('const update ='));
+  assert.match(createBlock, /const cls = await assertOwnedClass\(classId, req\.user\.organizationId\)/);
+  assert.match(createBlock, /organizationId: classOrganizationId\(cls\)/);
+});
+
 test('result publication is scoped through the owning exam organization', () => {
   const results = source('src/controllers/results.controller.js');
   assert.match(results, /return \{ exam: \{ organizationId: req\.user\.organizationId \} \}/);

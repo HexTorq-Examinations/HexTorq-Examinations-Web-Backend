@@ -55,7 +55,7 @@ const create = asyncHandler(async (req, res) => {
   if (!name || !registerNumber || !classId || !phone) {
     throw new ApiError(400, 'Missing required student fields');
   }
-  await assertOwnedClass(classId, req.user.organizationId);
+  const cls = await assertOwnedClass(classId, req.user.organizationId);
 
   const finalEmail = email || `${registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.hextorq.internal`;
 

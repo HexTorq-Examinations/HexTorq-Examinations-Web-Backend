@@ -46,7 +46,11 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(pinoHttp({ logger, genReqId: (req, res) => req.headers['x-request-id'] || crypto.randomUUID() }));
+app.use(pinoHttp({
+  logger,
+  genReqId: (req) => req.headers['x-request-id'] || crypto.randomUUID(),
+  customLogLevel: (req, res, error) => error || res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info',
+}));
 app.use(express.json());
 app.use(administrativeAudit);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
