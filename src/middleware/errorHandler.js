@@ -12,6 +12,17 @@ function errorHandler(err, req, res, next) {
     return res.status(400).json({ message: err.message || 'File upload failed' });
   }
 
+  if (err?.code === 'P2002') {
+    const targets = Array.isArray(err.meta?.target) ? err.meta.target : [err.meta?.target].filter(Boolean);
+    const isRegisterNumber = targets.some((target) => String(target).includes('registerNumber'));
+    return res.status(409).json({
+      message: isRegisterNumber
+        ? 'A student with this register number already exists'
+        : 'A record with the same unique value already exists',
+      code: 'DUPLICATE_RECORD',
+    });
+  }
+
   const statusCode = err instanceof ApiError ? err.statusCode : (err.statusCode || 500);
   if (!(err instanceof ApiError)) {
     logger.error({ err, method: req.method, path: req.originalUrl, userId: req.user?.id }, 'unhandled request error');

@@ -27,6 +27,17 @@ test('manual student creation uses the validated owned class', () => {
   assert.match(createBlock, /organizationId: classOrganizationId\(cls\)/);
 });
 
+test('student register numbers are database-unique and races return conflict', () => {
+  const schema = source('prisma/schema.prisma');
+  const errorHandler = source('src/middleware/errorHandler.js');
+  const migration = source('prisma/migrations/20260707140000_unique_student_register_number/migration.sql');
+  assert.match(schema, /registerNumber\s+String\s+@unique/);
+  assert.match(migration, /CREATE UNIQUE INDEX "StudentProfile_registerNumber_key"/);
+  assert.match(migration, /HAVING COUNT\(\*\) > 1/);
+  assert.match(errorHandler, /err\?\.code === 'P2002'/);
+  assert.match(errorHandler, /status\(409\)/);
+});
+
 test('result publication is scoped through the owning exam organization', () => {
   const results = source('src/controllers/results.controller.js');
   assert.match(results, /return \{ exam: \{ organizationId: req\.user\.organizationId \} \}/);
