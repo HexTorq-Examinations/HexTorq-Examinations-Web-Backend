@@ -14,6 +14,7 @@ router.use('/:examId/questions', questionsRouter);
 // Exam-taking flow (any authenticated user, primarily students)
 router.get('/history/me', attemptCtrl.myHistory);
 router.get('/:id/take', attemptCtrl.getExamForTaking);
+router.get('/:id/my-attempt', attemptCtrl.myAttemptStatus);
 router.post('/:id/start', attemptCtrl.startAttempt);
 router.post('/:id/answer', attemptCtrl.saveAnswer);
 router.post('/:id/violation', attemptCtrl.recordViolation);

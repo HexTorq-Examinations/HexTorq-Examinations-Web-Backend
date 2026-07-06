@@ -61,6 +61,9 @@ const create = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'examId, classId, date, startTime, and endTime are required');
   }
   const exam = await assertOwnedExam(examId, req.user.organizationId);
+  if (exam.status !== 'Published') {
+    throw new ApiError(400, 'Publish the exam before mapping it to students');
+  }
   await assertOwnedClass(classId, req.user.organizationId);
 
   const mapping = await prisma.examMapping.upsert({
@@ -75,7 +78,7 @@ const create = asyncHandler(async (req, res) => {
   await postSystemMessage(
     conversationId,
     req.user.id,
-    `New exam mapped: "${exam.title}" on ${mapping.date.toISOString().split('T')[0]} at ${startTime}.`
+    `Exam scheduled: "${exam.title}" on ${mapping.date.toISOString().split('T')[0]} from ${startTime} to ${endTime}${mapping.hall ? ` at ${mapping.hall}` : ''}.`
   );
 
   res.status(201).json(toPublic(mapping));
@@ -92,7 +95,7 @@ const assertOwnedMapping = async (id, organizationId) => {
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { date, startTime, endTime, hall, status } = req.body;
-  await assertOwnedMapping(id, req.user.organizationId);
+  const existingMapping = await assertOwnedMapping(id, req.user.organizationId);
 
   const mapping = await prisma.examMapping.update({
     where: { id },
@@ -105,6 +108,14 @@ const update = asyncHandler(async (req, res) => {
     },
     include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
   });
+
+  const conversationId = await ensureClassGroupConversation(mapping.classId, req.user.id);
+  await postSystemMessage(
+    conversationId,
+    req.user.id,
+    `Exam schedule updated: "${existingMapping.exam.title}" is on ${mapping.date.toISOString().split('T')[0]} from ${mapping.startTime} to ${mapping.endTime}${mapping.hall ? ` at ${mapping.hall}` : ''}.`
+  );
+
   res.json(toPublic(mapping));
 });
 
@@ -121,7 +132,7 @@ const mine = asyncHandler(async (req, res) => {
   if (!profile) return res.json([]);
 
   const mappings = await prisma.examMapping.findMany({
-    where: { classId: profile.classId },
+    where: { classId: profile.classId, exam: { status: 'Published' } },
     include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
     orderBy: { date: 'asc' },
   });

@@ -12,16 +12,92 @@ const shuffle = (arr) => {
   return result;
 };
 
+const calculateScore = async (examId, answers = {}) => {
+  const questions = await prisma.question.findMany({ where: { examId } });
+  return questions.reduce((score, question) => {
+    const correctOption = question.options[question.correctAnswer];
+    return answers[question.id] !== undefined && answers[question.id] === correctOption
+      ? score + question.marks
+      : score;
+  }, 0);
+};
+
+const ensurePendingResult = async (examId) => {
+  const existingResult = await prisma.result.findFirst({ where: { examId } });
+  if (existingResult) return;
+  const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { organizationId: true } });
+  await prisma.result.create({
+    data: { examId, organizationId: exam?.organizationId || null, status: 'Pending Evaluation', totalStudents: 1 },
+  });
+};
+
+// Finalization is server-owned and conditional, so a worker, a client submit, and
+// a last-second request can race without completing/scoring the same attempt twice.
+const finalizeAttempt = async (attempt, finalStatus = 'COMPLETED', endedAt = new Date()) => {
+  const claimed = await prisma.examAttempt.updateMany({
+    where: { id: attempt.id, status: 'IN_PROGRESS' },
+    data: { status: 'FINALIZING', endedAt },
+  });
+  let frozenAttempt = await prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+  if (!frozenAttempt || (claimed.count === 0 && frozenAttempt.status !== 'FINALIZING')) return frozenAttempt;
+
+  // Read answers only after claiming the attempt. No answer endpoint accepts the
+  // FINALIZING state, so this is a stable server-side snapshot for scoring.
+  const score = await calculateScore(frozenAttempt.examId, frozenAttempt.answers || {});
+  const completed = await prisma.examAttempt.updateMany({
+    where: { id: attempt.id, status: 'FINALIZING' },
+    data: { status: finalStatus, endedAt, score },
+  });
+  if (completed.count > 0) await ensurePendingResult(frozenAttempt.examId);
+  return prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+};
+
+const finalizeExpiredAttempts = async () => {
+  const now = new Date();
+  const expired = await prisma.examAttempt.findMany({
+    where: {
+      OR: [
+        { status: 'IN_PROGRESS', expiresAt: { lte: now } },
+        { status: 'FINALIZING' },
+      ],
+    },
+  });
+  await Promise.all(expired.map((attempt) => finalizeAttempt(attempt, 'COMPLETED', attempt.expiresAt || now)));
+  return expired.length;
+};
+
+const finalizeIfExpired = async (attempt) => {
+  if (!attempt?.expiresAt || attempt.expiresAt.getTime() > Date.now()) return null;
+  return finalizeAttempt(attempt, 'COMPLETED', attempt.expiresAt);
+};
+
 // A student may only view/start an exam once it's been mapped to their Class —
-// this is what Exam Mapping actually assigns. Throws 403 if no mapping exists.
+// this is what Exam Mapping actually assigns. Throws 403 if no mapping exists,
+// if the exam's scheduled window hasn't opened yet or has already closed, or if
+// the student has already completed/been terminated from this exam once.
 const assertStudentHasMapping = async (examId, userId) => {
   const profile = await prisma.studentProfile.findUnique({ where: { userId } });
   if (!profile) throw new ApiError(403, 'Only students can take exams');
 
   const mapping = await prisma.examMapping.findUnique({
     where: { examId_classId: { examId, classId: profile.classId } },
+    include: { exam: { select: { status: true } } },
   });
   if (!mapping) throw new ApiError(403, 'This exam has not been scheduled for your class');
+  if (mapping.exam.status !== 'Published') throw new ApiError(403, 'This exam has not been published yet');
+
+  const priorAttempt = await prisma.examAttempt.findFirst({
+    where: { examId, userId, status: { in: ['COMPLETED', 'TERMINATED'] } },
+  });
+  if (priorAttempt) throw new ApiError(403, 'You have already attempted this exam');
+
+  const dateStr = mapping.date.toISOString().slice(0, 10);
+  const windowStart = new Date(`${dateStr}T${mapping.startTime}:00`);
+  const windowEnd = new Date(`${dateStr}T${mapping.endTime}:00`);
+  const now = new Date();
+  if (now < windowStart) throw new ApiError(403, 'This exam has not started yet');
+  if (now > windowEnd) throw new ApiError(403, 'This exam window has already ended');
+
   return mapping;
 };
 
@@ -37,6 +113,10 @@ const getExamForTaking = asyncHandler(async (req, res) => {
   if (!exam) throw new ApiError(404, 'Exam not found');
 
   const rawQuestions = await prisma.question.findMany({ where: { examId: id } });
+  if (rawQuestions.length === 0) {
+    throw new ApiError(400, 'This exam has no questions configured. Please contact your exam administrator.');
+  }
+
   let questions = rawQuestions.map((q) => ({
     id: q.id,
     text: q.text,
@@ -61,27 +141,47 @@ const getExamForTaking = asyncHandler(async (req, res) => {
 
 const startAttempt = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  await assertStudentHasMapping(id, req.user.id);
+  const mapping = await assertStudentHasMapping(id, req.user.id);
 
-  const exam = await prisma.exam.findUnique({ where: { id } });
+  const exam = await prisma.exam.findUnique({
+    where: { id },
+    include: { _count: { select: { questions: true } } },
+  });
   if (!exam) throw new ApiError(404, 'Exam not found');
+  if (exam._count.questions === 0) {
+    throw new ApiError(400, 'This exam has no questions configured. Add questions before starting it.');
+  }
 
   let attempt = await prisma.examAttempt.findFirst({
     where: { examId: id, userId: req.user.id, status: 'IN_PROGRESS' },
   });
 
   if (!attempt) {
+    const startedAt = new Date();
+    const durationDeadline = new Date(startedAt.getTime() + exam.duration * 60 * 1000);
+    const mappingDate = mapping.date.toISOString().slice(0, 10);
+    const mappingDeadline = new Date(`${mappingDate}T${mapping.endTime}:00`);
+    const expiresAt = new Date(Math.min(durationDeadline.getTime(), mappingDeadline.getTime()));
     attempt = await prisma.examAttempt.create({
-      data: { examId: id, userId: req.user.id, status: 'IN_PROGRESS', answers: {}, violations: [] },
+      data: { examId: id, userId: req.user.id, status: 'IN_PROGRESS', startedAt, expiresAt, answers: {}, violations: [] },
     });
+  } else if (!attempt.expiresAt) {
+    const expiresAt = new Date(attempt.startedAt.getTime() + exam.duration * 60 * 1000);
+    attempt = await prisma.examAttempt.update({ where: { id: attempt.id }, data: { expiresAt } });
   }
+
+  const expiredAttempt = await finalizeIfExpired(attempt);
+  if (expiredAttempt) throw new ApiError(409, 'This exam attempt has expired and was submitted automatically');
 
   res.status(201).json({
     attemptId: attempt.id,
     status: attempt.status,
     answers: attempt.answers,
     violations: attempt.violations,
-    durationSeconds: exam.duration * 60,
+    serverNow: new Date().toISOString(),
+    startedAt: attempt.startedAt.toISOString(),
+    expiresAt: attempt.expiresAt.toISOString(),
+    durationSeconds: Math.max(0, Math.ceil((attempt.expiresAt.getTime() - Date.now()) / 1000)),
   });
 });
 
@@ -93,14 +193,31 @@ const saveAnswer = asyncHandler(async (req, res) => {
   const attempt = await prisma.examAttempt.findFirst({
     where: { examId: id, userId: req.user.id, status: 'IN_PROGRESS' },
   });
-  if (!attempt) throw new ApiError(404, 'No active attempt found for this exam');
+  if (!attempt) {
+    // A delayed offline retry may arrive after the server has already finalized
+    // the deadline. Return the authoritative final snapshot so the client can
+    // stop retrying; answers received after expiry are intentionally not counted.
+    const finished = await prisma.examAttempt.findFirst({
+      where: { examId: id, userId: req.user.id, status: { in: ['COMPLETED', 'TERMINATED'] } },
+      orderBy: { endedAt: 'desc' },
+    });
+    if (finished) return res.json({ answers: finished.answers, status: finished.status });
+    throw new ApiError(404, 'No active attempt found for this exam');
+  }
+  if (await finalizeIfExpired(attempt)) {
+    throw new ApiError(409, 'The exam time has ended and the attempt was submitted automatically');
+  }
 
   const answers = { ...(attempt.answers || {}), [questionId]: answer };
-  const updated = await prisma.examAttempt.update({
-    where: { id: attempt.id },
+  const updated = await prisma.examAttempt.updateMany({
+    where: { id: attempt.id, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
     data: { answers },
   });
-  res.json({ answers: updated.answers });
+  if (updated.count === 0) {
+    await finalizeIfExpired(attempt);
+    throw new ApiError(409, 'The exam time has ended and the attempt was submitted automatically');
+  }
+  res.json({ answers });
 });
 
 // Warnings 1-5 are allowed; the 6th violation (count > MAX_VIOLATIONS) auto-terminates the attempt.
@@ -124,6 +241,10 @@ const recordViolation = asyncHandler(async (req, res) => {
     });
     if (finished) return res.json({ violations: finished.violations, status: finished.status });
     throw new ApiError(404, 'No attempt found for this exam');
+  }
+
+  if (await finalizeIfExpired(attempt)) {
+    return res.json({ violations: attempt.violations || [], status: 'COMPLETED' });
   }
 
   const existing = attempt.violations || [];
@@ -175,27 +296,15 @@ const submitAttempt = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'No active attempt found for this exam');
   }
 
-  const questions = await prisma.question.findMany({ where: { examId: id } });
-
-  const answers = attempt.answers || {};
-  let score = 0;
-  for (const q of questions) {
-    const given = answers[q.id];
-    const correctOption = q.options[q.correctAnswer];
-    if (given !== undefined && given === correctOption) {
-      score += q.marks;
-    }
-  }
-
   const finalStatus = status === 'TERMINATED' ? 'TERMINATED' : 'COMPLETED';
-  const updated = await prisma.examAttempt.update({
-    where: { id: attempt.id },
-    data: { status: finalStatus, endedAt: new Date(), score },
-  });
+  const updated = await finalizeAttempt(attempt, finalStatus);
 
   res.json({ attemptId: updated.id, status: updated.status, score: updated.score });
 });
 
+// Scores are only ever revealed to the student once the org's Admin has explicitly
+// published the Result for that exam — an unpublished/missing Result row means
+// "Pending Evaluation" and the raw score is withheld entirely, not just hidden in the UI.
 const myHistory = asyncHandler(async (req, res) => {
   const attempts = await prisma.examAttempt.findMany({
     where: { userId: req.user.id, status: { in: ['COMPLETED', 'TERMINATED'] } },
@@ -203,12 +312,41 @@ const myHistory = asyncHandler(async (req, res) => {
     orderBy: { endedAt: 'desc' },
   });
 
-  res.json(attempts.map((a) => ({
-    examId: a.examId,
-    status: a.status,
-    score: a.score,
-    date: (a.endedAt || a.createdAt).getTime(),
-  })));
+  const examIds = attempts.map((a) => a.examId);
+  const results = await prisma.result.findMany({ where: { examId: { in: examIds } } });
+  const publishedExamIds = new Set(results.filter((r) => r.status === 'Published').map((r) => r.examId));
+
+  res.json(attempts.map((a) => {
+    const isPublished = publishedExamIds.has(a.examId);
+    return {
+      examId: a.examId,
+      status: a.status,
+      resultStatus: isPublished ? 'Published' : 'Pending Evaluation',
+      score: isPublished ? a.score : null,
+      date: (a.endedAt || a.createdAt).getTime(),
+    };
+  }));
 });
 
-module.exports = { getExamForTaking, startAttempt, saveAnswer, recordViolation, submitAttempt, myHistory };
+// Read-only progress snapshot for the Active Exams list — does NOT create an
+// attempt as a side effect (unlike startAttempt), so simply viewing the list
+// can never start the clock on an exam.
+const myAttemptStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const [attempt, totalQuestions] = await Promise.all([
+    prisma.examAttempt.findFirst({ where: { examId: id, userId: req.user.id, status: 'IN_PROGRESS' } }),
+    prisma.question.count({ where: { examId: id } }),
+  ]);
+  const finalized = attempt ? await finalizeIfExpired(attempt) : null;
+  const activeAttempt = finalized ? null : attempt;
+  res.json({
+    hasActiveAttempt: !!activeAttempt,
+    status: finalized?.status || activeAttempt?.status || null,
+    serverNow: new Date().toISOString(),
+    expiresAt: activeAttempt?.expiresAt?.toISOString() || null,
+    answeredCount: activeAttempt ? Object.keys(activeAttempt.answers || {}).length : 0,
+    totalQuestions,
+  });
+});
+
+module.exports = { getExamForTaking, startAttempt, saveAnswer, recordViolation, submitAttempt, myHistory, myAttemptStatus, finalizeExpiredAttempts };

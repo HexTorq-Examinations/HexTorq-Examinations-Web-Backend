@@ -279,7 +279,11 @@ async function ensureClassGroupConversation(classId, creatorUserId) {
     select: { userId: true },
   });
   const existingIds = new Set(existingParticipants.map((p) => p.userId));
-  const missing = students.filter((s) => !existingIds.has(s.id));
+  // Keep every current student in the class subscribed. Also add the admin who is
+  // posting this announcement; an existing class group may have been created by a
+  // different admin, and postSystemMessage marks the sender's copy as read.
+  const requiredParticipants = [{ id: creatorUserId }, ...students];
+  const missing = requiredParticipants.filter((participant) => !existingIds.has(participant.id));
   if (missing.length > 0) {
     await prisma.conversationParticipant.createMany({
       data: missing.map((s) => ({ conversationId: conversation.id, userId: s.id })),
@@ -292,8 +296,8 @@ async function ensureClassGroupConversation(classId, creatorUserId) {
 
 async function postSystemMessage(conversationId, senderId, text) {
   const message = await prisma.message.create({ data: { conversationId, senderId, text } });
-  await prisma.conversationParticipant.update({
-    where: { conversationId_userId: { conversationId, userId: senderId } },
+  await prisma.conversationParticipant.updateMany({
+    where: { conversationId, userId: senderId },
     data: { lastReadAt: message.createdAt },
   });
   return message;

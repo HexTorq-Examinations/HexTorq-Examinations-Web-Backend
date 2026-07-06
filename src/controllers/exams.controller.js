@@ -43,7 +43,8 @@ const buildData = (body, req) => ({
   duration: Number(body.duration),
   totalMarks: Number(body.totalMarks),
   passingMarks: Number(body.passingMarks),
-  status: body.status || 'Draft',
+  // Publishing is a separate validated action; creation always starts in Draft.
+  status: 'Draft',
   shuffleQuestions: !!body.shuffleQuestions,
   shuffleOptions: !!body.shuffleOptions,
   negativeMarking: !!body.negativeMarking,
@@ -65,6 +66,27 @@ const create = asyncHandler(async (req, res) => {
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { title, subject, description, duration, totalMarks, passingMarks, status, shuffleQuestions, shuffleOptions, negativeMarking } = req.body;
+
+  if (status !== undefined && !['Draft', 'Published', 'Completed'].includes(status)) {
+    throw new ApiError(400, 'Invalid exam status');
+  }
+
+  if (status === 'Published') {
+    const exam = await prisma.exam.findUnique({
+      where: { id },
+      include: { questions: { select: { marks: true } } },
+    });
+    if (!exam) throw new ApiError(404, 'Exam not found');
+
+    const configuredTotalMarks = exam.questions.reduce((sum, question) => sum + question.marks, 0);
+    const expectedTotalMarks = totalMarks !== undefined ? Number(totalMarks) : exam.totalMarks;
+    if (exam.questions.length === 0) {
+      throw new ApiError(400, 'Add questions before publishing this exam');
+    }
+    if (configuredTotalMarks !== expectedTotalMarks) {
+      throw new ApiError(400, `Question marks total ${configuredTotalMarks}, but the exam total is ${expectedTotalMarks}. Add or update questions before publishing.`);
+    }
+  }
 
   const exam = await prisma.exam.update({
     where: { id },

@@ -221,9 +221,12 @@ model ExamAttempt {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   status     String    @default("IN_PROGRESS")
   startedAt  DateTime  @default(now())
+  expiresAt  DateTime?
   endedAt    DateTime?
   score      Int       @default(0)
   answers    Json      @default("{}")
   violations Json      @default("[]")
   createdAt  DateTime  @default(now())
+
+  @@index([status, expiresAt])
 }

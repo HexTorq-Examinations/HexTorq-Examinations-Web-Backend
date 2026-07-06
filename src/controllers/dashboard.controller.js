@@ -27,7 +27,7 @@ const superAdminStats = asyncHandler(async (req, res) => {
     prisma.organization.count(),
     prisma.user.count({ where: { role: 'STUDENT' } }),
     prisma.user.count({ where: { role: { in: ['ADMIN', 'SUPER_ADMIN'] } } }),
-    prisma.exam.count({ where: { status: 'Active' } }),
+    prisma.exam.count({ where: { status: 'Published' } }),
     prisma.exam.count(),
     prisma.result.count({ where: { status: 'Published' } }),
     prisma.examAttempt.count({ where: { status: { in: ['COMPLETED', 'TERMINATED'] } } }),
@@ -41,7 +41,7 @@ const adminStats = asyncHandler(async (req, res) => {
   const attemptUserFilter = batchId ? { user: studentBatchWhere(batchId) } : {};
   const [totalStudents, activeExams, totalExams, publishedResults, totalAttempts] = await Promise.all([
     prisma.user.count({ where: { role: 'STUDENT', ...orgFilter, ...studentBatchWhere(batchId) } }),
-    prisma.exam.count({ where: { status: 'Active', ...orgFilter, ...examBatchWhere(batchId) } }),
+    prisma.exam.count({ where: { status: 'Published', ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.exam.count({ where: { ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.result.count({ where: { ...orgFilter, status: 'Published', exam: examBatchWhere(batchId) } }),
     prisma.examAttempt.count({ where: { exam: orgFilter, ...attemptUserFilter, status: { in: ['COMPLETED', 'TERMINATED'] } } }),
@@ -52,7 +52,7 @@ const adminStats = asyncHandler(async (req, res) => {
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const STATUS_COLORS = {
   Completed: '#10b981',
-  Active: '#3b82f6',
+  Published: '#3b82f6',
   Draft: '#94a3b8',
   Scheduled: '#8b5cf6',
 };
