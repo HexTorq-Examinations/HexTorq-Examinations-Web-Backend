@@ -3,7 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { deleteStudentsInClasses } = require('./classes.controller');
 
-const toPublic = (d) => ({ id: d.id, name: d.name, schoolId: d.schoolId, createdAt: d.createdAt });
+const toPublic = (d) => ({ id: d.id, name: d.name, schoolId: d.schoolId, createdAt: d.createdAt, classCount: d._count?.classes });
 
 const assertOwnedSchool = async (schoolId, organizationId) => {
   const school = await prisma.school.findUnique({ where: { id: schoolId }, include: { batch: true } });
@@ -16,7 +16,11 @@ const list = asyncHandler(async (req, res) => {
   if (!schoolId) throw new ApiError(400, 'schoolId query param is required');
   await assertOwnedSchool(schoolId, req.user.organizationId);
 
-  const departments = await prisma.department.findMany({ where: { schoolId }, orderBy: { createdAt: 'desc' } });
+  const departments = await prisma.department.findMany({
+    where: { schoolId },
+    include: { _count: { select: { classes: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
   res.json(departments.map(toPublic));
 });
 
@@ -25,7 +29,7 @@ const create = asyncHandler(async (req, res) => {
   if (!name || !schoolId) throw new ApiError(400, 'name and schoolId are required');
   await assertOwnedSchool(schoolId, req.user.organizationId);
 
-  const department = await prisma.department.create({ data: { name, schoolId } });
+  const department = await prisma.department.create({ data: { name, schoolId }, include: { _count: { select: { classes: true } } } });
   res.status(201).json(toPublic(department));
 });
 
@@ -44,7 +48,7 @@ const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
   await assertOwnedDepartment(id, req.user.organizationId);
-  const department = await prisma.department.update({ where: { id }, data: { name } });
+  const department = await prisma.department.update({ where: { id }, data: { name }, include: { _count: { select: { classes: true } } } });
   res.json(toPublic(department));
 });
 

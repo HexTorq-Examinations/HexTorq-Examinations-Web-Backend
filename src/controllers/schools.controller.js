@@ -3,7 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { deleteStudentsInClasses } = require('./classes.controller');
 
-const toPublic = (s) => ({ id: s.id, name: s.name, batchId: s.batchId, createdAt: s.createdAt });
+const toPublic = (s) => ({ id: s.id, name: s.name, batchId: s.batchId, createdAt: s.createdAt, departmentCount: s._count?.departments });
 
 const assertOwnedBatch = async (batchId, organizationId) => {
   const batch = await prisma.batch.findUnique({ where: { id: batchId } });
@@ -16,7 +16,11 @@ const list = asyncHandler(async (req, res) => {
   if (!batchId) throw new ApiError(400, 'batchId query param is required');
   await assertOwnedBatch(batchId, req.user.organizationId);
 
-  const schools = await prisma.school.findMany({ where: { batchId }, orderBy: { createdAt: 'desc' } });
+  const schools = await prisma.school.findMany({
+    where: { batchId },
+    include: { _count: { select: { departments: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
   res.json(schools.map(toPublic));
 });
 
@@ -25,7 +29,7 @@ const create = asyncHandler(async (req, res) => {
   if (!name || !batchId) throw new ApiError(400, 'name and batchId are required');
   await assertOwnedBatch(batchId, req.user.organizationId);
 
-  const school = await prisma.school.create({ data: { name, batchId } });
+  const school = await prisma.school.create({ data: { name, batchId }, include: { _count: { select: { departments: true } } } });
   res.status(201).json(toPublic(school));
 });
 
@@ -39,7 +43,7 @@ const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
   await assertOwnedSchool(id, req.user.organizationId);
-  const school = await prisma.school.update({ where: { id }, data: { name } });
+  const school = await prisma.school.update({ where: { id }, data: { name }, include: { _count: { select: { departments: true } } } });
   res.json(toPublic(school));
 });
 
