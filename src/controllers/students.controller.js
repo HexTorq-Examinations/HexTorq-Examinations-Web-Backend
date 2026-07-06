@@ -62,6 +62,12 @@ const create = asyncHandler(async (req, res) => {
   const existing = await prisma.user.findUnique({ where: { email: finalEmail } });
   if (existing) throw new ApiError(409, 'A user with this email already exists');
 
+  // registerNumber doubles as a login identifier (see auth.controller's login
+  // fallback), so a duplicate isn't just a data-quality issue — it makes one of
+  // the two students unable to reliably log in with their own ID.
+  const existingRegisterNumber = await prisma.studentProfile.findFirst({ where: { registerNumber } });
+  if (existingRegisterNumber) throw new ApiError(409, `A student with register number "${registerNumber}" already exists`);
+
   const passwordHash = await bcrypt.hash(password || DEFAULT_PASSWORD, 10);
   const student = await prisma.user.create({
     data: {
@@ -85,10 +91,15 @@ const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name, registerNumber, classId, email, phone, status, extraTimeMinutes, accessibilityNotes } = req.body;
 
-  await assertOwnedStudent(id, req);
+  const current = await assertOwnedStudent(id, req);
   const targetClass = classId !== undefined
     ? await assertOwnedClass(classId, req.user.organizationId)
     : null;
+
+  if (registerNumber !== undefined && registerNumber !== current.studentProfile?.registerNumber) {
+    const clash = await prisma.studentProfile.findFirst({ where: { registerNumber, userId: { not: id } } });
+    if (clash) throw new ApiError(409, `A student with register number "${registerNumber}" already exists`);
+  }
 
   const student = await prisma.user.update({
     where: { id },
@@ -156,12 +167,40 @@ const importFromFile = asyncHandler(async (req, res) => {
     select: { email: true },
   });
   const dupeEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
-  const dupeErrors = students
-    .map((s, i) => ({ s, i }))
-    .filter(({ s }) => dupeEmails.has(s.email.toLowerCase()))
-    .map(({ s, i }) => ({ row: i + 2, error: `A user with email "${s.email}" already exists.` }));
 
-  const validStudents = students.filter(s => !dupeEmails.has(s.email.toLowerCase()));
+  // registerNumber doubles as a login identifier (see auth.controller's login
+  // fallback) — a duplicate leaves one of the colliding students unable to
+  // reliably log in with their own ID, so it's checked with the same rigor as
+  // email, both against existing students and duplicates within this file.
+  const registerNumbers = students.map((s) => s.registerNumber);
+  const existingProfiles = await prisma.studentProfile.findMany({
+    where: { registerNumber: { in: registerNumbers } },
+    select: { registerNumber: true },
+  });
+  const dupeRegisterNumbers = new Set(existingProfiles.map((p) => p.registerNumber));
+  const seenInFile = new Set();
+
+  // A single pass so a registerNumber is always recorded as "seen" even when the
+  // row is rejected for a different reason (e.g. duplicate email) — otherwise a
+  // later row repeating that same registerNumber would slip through unflagged.
+  const dupeErrors = [];
+  const validStudents = [];
+  students.forEach((s, i) => {
+    const emailDupe = dupeEmails.has(s.email.toLowerCase());
+    const registerNumberDupe = dupeRegisterNumbers.has(s.registerNumber) || seenInFile.has(s.registerNumber);
+    seenInFile.add(s.registerNumber);
+
+    if (emailDupe || registerNumberDupe) {
+      dupeErrors.push({
+        row: i + 2,
+        error: emailDupe
+          ? `A user with email "${s.email}" already exists.`
+          : `A student with register number "${s.registerNumber}" already exists.`,
+      });
+    } else {
+      validStudents.push(s);
+    }
+  });
 
   if (validStudents.length === 0 && dupeErrors.length > 0) {
     return res.status(400).json({ message: 'All students in the file already exist.', errors: dupeErrors });
