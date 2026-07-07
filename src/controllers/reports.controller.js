@@ -17,7 +17,7 @@ const dateWhere = (range) => {
   return days ? { gte: new Date(Date.now() - days * 86400000) } : undefined;
 };
 const orgId = (req) => req.user.role === 'ADMIN' ? req.user.organizationId : undefined;
-const examScope = (req) => orgId(req) ? { organizationId: orgId(req) } : {};
+const examScope = (req) => ({ ...(orgId(req) ? { organizationId: orgId(req) } : {}), isTestExam: false });
 const studentScope = (req) => orgId(req) ? { organizationId: orgId(req) } : {};
 const round = (value, digits = 1) => Number((Number(value) || 0).toFixed(digits));
 

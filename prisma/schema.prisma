@@ -24,10 +24,21 @@ model Organization {
   timezone   String   @default("Asia/Kolkata")
   createdAt  DateTime @default(now())
 
-  users   User[]
-  exams   Exam[]
-  results Result[]
-  batches Batch[]
+  users    User[]
+  exams    Exam[]
+  results  Result[]
+  batches  Batch[]
+  settings PlatformSetting?
+}
+
+model PlatformSetting {
+  id             String        @id @default(cuid())
+  scopeKey       String        @unique
+  organizationId String?       @unique
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  data           Json          @default("{}")
+  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime      @default(now())
 }
 
 model User {

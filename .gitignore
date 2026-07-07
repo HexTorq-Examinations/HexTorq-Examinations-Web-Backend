@@ -4,3 +4,4 @@ uploads/*
 !uploads/avatars/.gitkeep
 .backup/
 logs/
+backups/

@@ -48,4 +48,14 @@ test('attempt response PDF uses the owned frozen attempt', () => {
   assert.match(results, /const attemptResponsePdf/);
   assert.match(results, /loadOwnedAttempt\(req\.params\.id, req\)/);
   assert.match(results, /Student answer:/);
+  assert.match(results, /Only finalized attempts can be exported/);
+});
+
+test('official results wait for exam completion and exclude test exams', () => {
+  const results = source('src/controllers/results.controller.js');
+  const reports = source('src/controllers/reports.controller.js');
+  assert.match(results, /now <= latestEnd/);
+  assert.match(results, /Students still have active attempts/);
+  assert.match(results, /isTestExam: false/);
+  assert.match(reports, /isTestExam: false/);
 });

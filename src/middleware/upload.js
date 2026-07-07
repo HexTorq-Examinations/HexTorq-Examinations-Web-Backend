@@ -1,17 +1,4 @@
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-
-const avatarsDir = path.join(__dirname, '..', '..', 'uploads', 'avatars');
-fs.mkdirSync(avatarsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, avatarsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${req.user.id}-${Date.now()}${ext}`);
-  },
-});
 
 const fileFilter = (req, file, cb) => {
   if (/^image\/(png|jpe?g|webp|gif)$/.test(file.mimetype)) {
@@ -22,7 +9,7 @@ const fileFilter = (req, file, cb) => {
 };
 
 const uploadAvatar = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter,
   limits: { fileSize: 2 * 1024 * 1024 },
 });

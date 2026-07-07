@@ -58,3 +58,19 @@ test('attempt and personal mapping APIs are student-only', () => {
   assert.ok((examsRoutes.match(/authorize\('STUDENT'\)/g) || []).length >= 7);
   assert.match(mappingRoutes, /router\.get\('\/mine', authorize\('STUDENT'\)/);
 });
+
+test('unexpected server errors are logged but hidden from API clients', () => {
+  const errors = source('src/middleware/errorHandler.js');
+  assert.match(errors, /statusCode >= 500 \? 'Internal server error'/);
+  assert.match(errors, /requestId: req\.id/);
+  assert.match(errors, /statusCode < 500 && err\.details/);
+});
+
+test('avatar uploads verify image content and use hierarchy folders', () => {
+  const upload = source('src/middleware/upload.js');
+  const users = source('src/controllers/users.controller.js');
+  assert.match(upload, /multer\.memoryStorage\(\)/);
+  assert.match(users, /imageExtension/);
+  assert.match(users, /batch-\$\{profile\.class\.department\.school\.batchId\}/);
+  assert.match(users, /class-\$\{profile\.classId\}/);
+});

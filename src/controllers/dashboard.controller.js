@@ -41,8 +41,8 @@ const superAdminStats = asyncHandler(async (req, res) => {
     prisma.user.count({ where: { role: { in: ['ADMIN', 'SUPER_ADMIN'] } } }),
     prisma.exam.count({ where: { status: 'Published' } }),
     prisma.exam.count(),
-    prisma.result.count({ where: { status: 'Published' } }),
-    prisma.examAttempt.count({ where: { status: { in: ['COMPLETED', 'TERMINATED'] } } }),
+    prisma.result.count({ where: { status: 'Published', exam: { isTestExam: false } } }),
+    prisma.examAttempt.count({ where: { status: { in: ['COMPLETED', 'TERMINATED'] }, exam: { isTestExam: false } } }),
   ]);
   res.json({ totalOrganizations, totalStudents, totalAdmins, activeExams, totalExams, publishedResults, totalAttempts, ...(await hierarchyCounts({})) });
 });
@@ -56,8 +56,8 @@ const adminStats = asyncHandler(async (req, res) => {
     prisma.user.count({ where: { role: 'STUDENT', ...orgFilter, ...studentBatchWhere(batchId) } }),
     prisma.exam.count({ where: { status: 'Published', ...orgFilter, ...examBatchWhere(batchId) } }),
     prisma.exam.count({ where: { ...orgFilter, ...examBatchWhere(batchId) } }),
-    prisma.result.count({ where: { status: 'Published', exam: { ...orgFilter, ...examBatchWhere(batchId) } } }),
-    prisma.examAttempt.count({ where: { exam: orgFilter, ...attemptUserFilter, status: { in: ['COMPLETED', 'TERMINATED'] } } }),
+    prisma.result.count({ where: { status: 'Published', exam: { ...orgFilter, ...examBatchWhere(batchId), isTestExam: false } } }),
+    prisma.examAttempt.count({ where: { exam: { ...orgFilter, isTestExam: false }, ...attemptUserFilter, status: { in: ['COMPLETED', 'TERMINATED'] } } }),
   ]);
   res.json({ totalStudents, activeExams, totalExams, publishedResults, totalAttempts, ...(await hierarchyCounts(orgFilter, batchId)) });
 });
@@ -98,7 +98,7 @@ const getOverview = asyncHandler(async (req, res) => {
     const [created, completed] = await Promise.all([
       prisma.exam.count({ where: { ...examOrgFilter, createdAt: { gte: start, lt: end } } }),
       prisma.examAttempt.count({
-        where: { exam: orgFilter, ...attemptUserFilter, status: 'COMPLETED', endedAt: { gte: start, lt: end } },
+        where: { exam: { ...orgFilter, isTestExam: false }, ...attemptUserFilter, status: 'COMPLETED', endedAt: { gte: start, lt: end } },
       }),
     ]);
     return { name, created, completed };
@@ -141,7 +141,7 @@ const getOverview = asyncHandler(async (req, res) => {
     const start = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
     const end = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i + 1);
     const attempts = await prisma.examAttempt.count({
-      where: { exam: orgFilter, ...attemptUserFilter, startedAt: { gte: start, lt: end } },
+      where: { exam: { ...orgFilter, isTestExam: false }, ...attemptUserFilter, startedAt: { gte: start, lt: end } },
     });
     return { name, attempts };
   }));

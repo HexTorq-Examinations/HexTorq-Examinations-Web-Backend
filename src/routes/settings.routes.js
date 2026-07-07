@@ -1,0 +1,11 @@
+const express = require('express');
+const { authenticate, authorize } = require('../middleware/auth');
+const ctrl = require('../controllers/settings.controller');
+const router = express.Router();
+router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN'));
+router.get('/', ctrl.get);
+router.patch('/', ctrl.update);
+router.get('/backup', ctrl.backupStatus);
+router.post('/backup', ctrl.runBackup);
+router.get('/backup/download', ctrl.downloadLatest);
+module.exports = router;

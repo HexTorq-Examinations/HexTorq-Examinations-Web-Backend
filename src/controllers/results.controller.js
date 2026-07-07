@@ -12,6 +12,15 @@ const scopeWhere = (req) => {
   return {};
 };
 
+const publicationState = (exam, now = new Date()) => {
+  if (exam?.isTestExam) return { canPublish: false, publishBlockedReason: 'Test exams do not produce official results' };
+  if (!exam?.mappings?.length) return { canPublish: false, publishBlockedReason: 'The exam has not been scheduled' };
+  const latestEnd = new Date(Math.max(...exam.mappings.map((mapping) => mapping.endAt.getTime() + mapping.graceMinutes * 60_000)));
+  if (now <= latestEnd) return { canPublish: false, publishBlockedReason: `Results can be published after ${latestEnd.toISOString()}` };
+  if (exam._count?.attempts > 0) return { canPublish: false, publishBlockedReason: 'Students still have active attempts' };
+  return { canPublish: true, publishBlockedReason: null };
+};
+
 const toPublic = (r) => ({
   id: r.id,
   examId: r.examId,
@@ -20,6 +29,7 @@ const toPublic = (r) => ({
   totalStudents: r.totalStudents,
   publishedDate: r.publishedDate ? r.publishedDate.toISOString().split('T')[0] : '',
   status: r.status,
+  ...publicationState(r.exam),
 });
 
 // Results are derived from real ExamAttempt rows (score, status) rather than entered by
@@ -32,7 +42,7 @@ const syncResultsFromAttempts = async (req) => {
 
   const finishedByExam = await prisma.examAttempt.groupBy({
     by: ['examId'],
-    where: { status: { in: ['COMPLETED', 'TERMINATED'] }, exam: examOrgFilter },
+    where: { status: { in: ['COMPLETED', 'TERMINATED'] }, exam: { ...examOrgFilter, isTestExam: false } },
     _count: { _all: true },
   });
 
@@ -61,8 +71,8 @@ const syncResultsFromAttempts = async (req) => {
 const list = asyncHandler(async (req, res) => {
   await syncResultsFromAttempts(req);
   const results = await prisma.result.findMany({
-    where: scopeWhere(req),
-    include: { exam: true },
+    where: { ...scopeWhere(req), exam: { ...(scopeWhere(req).exam || {}), isTestExam: false } },
+    include: { exam: { include: { mappings: true, _count: { select: { attempts: { where: { status: 'IN_PROGRESS' } } } } } } },
     orderBy: { id: 'desc' },
   });
   res.json(results.map(toPublic));
@@ -72,11 +82,13 @@ const publish = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const ownedResult = await prisma.result.findFirst({
     where: { id, ...scopeWhere(req) },
-    select: { id: true },
+    include: { exam: { include: { mappings: true, _count: { select: { attempts: { where: { status: 'IN_PROGRESS' } } } } } } },
   });
   if (!ownedResult) {
     throw new ApiError(404, 'Result not found');
   }
+  const publication = publicationState(ownedResult.exam);
+  if (!publication.canPublish) throw new ApiError(409, publication.publishBlockedReason);
   const result = await prisma.result.update({
     where: { id },
     data: { status: 'Published', publishedDate: new Date() },
@@ -220,7 +232,8 @@ const resetAttempt = asyncHandler(async (req, res) => {
 
 const csvEscape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 const exportCsv = asyncHandler(async (req, res) => {
-  const result = await prisma.result.findFirst({ where: { id: req.params.id, ...scopeWhere(req) }, include: { exam: true } });
+  const scoped = scopeWhere(req);
+  const result = await prisma.result.findFirst({ where: { id: req.params.id, ...scoped, exam: { ...(scoped.exam || {}), isTestExam: false } }, include: { exam: true } });
   if (!result) throw new ApiError(404, 'Result not found');
   const attempts = await prisma.examAttempt.findMany({ where: { examId: result.examId, status: { in: ['COMPLETED', 'TERMINATED'] } }, include: { user: { include: { studentProfile: true } } } });
   const rows = [['Register Number', 'Student', 'Email', 'Score', 'Status'], ...attempts.map((a) => [a.user.studentProfile?.registerNumber, a.user.name, a.user.email, a.score, a.status])];
@@ -230,8 +243,9 @@ const exportCsv = asyncHandler(async (req, res) => {
 });
 
 const exportAllCsv = asyncHandler(async (req, res) => {
+  const scoped = attemptScope(req);
   const attempts = await prisma.examAttempt.findMany({
-    where: { ...attemptScope(req), status: { in: ['COMPLETED', 'TERMINATED'] } },
+    where: { ...scoped, exam: { ...(scoped.exam || {}), isTestExam: false }, status: { in: ['COMPLETED', 'TERMINATED'] } },
     include: { exam: true, user: { include: { studentProfile: true } } },
     orderBy: { endedAt: 'desc' },
   });
@@ -243,6 +257,7 @@ const exportAllCsv = asyncHandler(async (req, res) => {
 
 const attemptPdf = asyncHandler(async (req, res) => {
   const attempt = await loadOwnedAttempt(req.params.id, req);
+  if (!['COMPLETED', 'TERMINATED'].includes(attempt.status)) throw new ApiError(409, 'Only finalized attempts can be exported');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="scorecard-${attempt.id}.pdf"`);
   const doc = new PDFDocument({ margin: 50 });
@@ -260,6 +275,7 @@ const attemptPdf = asyncHandler(async (req, res) => {
 
 const attemptResponsePdf = asyncHandler(async (req, res) => {
   const attempt = await loadOwnedAttempt(req.params.id, req);
+  if (!['COMPLETED', 'TERMINATED'].includes(attempt.status)) throw new ApiError(409, 'Only finalized attempts can be exported');
   const answers = Object.fromEntries(attempt.answerRecords.map((answer) => [answer.questionId, answer.selectedAnswer]));
   const snapshot = Array.isArray(attempt.questionSnapshot) ? attempt.questionSnapshot : [];
   res.setHeader('Content-Type', 'application/pdf');
@@ -308,7 +324,7 @@ const analytics = asyncHandler(async (req, res) => {
     : {};
 
   const attempts = await prisma.examAttempt.findMany({
-    where: { status: { in: ['COMPLETED', 'TERMINATED'] }, exam: examOrgFilter },
+    where: { status: { in: ['COMPLETED', 'TERMINATED'] }, exam: { ...examOrgFilter, isTestExam: false } },
     include: { exam: true },
   });
 

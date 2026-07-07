@@ -52,3 +52,13 @@ test('notification delivery tracking supports all delivery channels', () => {
   assert.match(schema, /model NotificationDelivery/);
   assert.match(mailer, /channel: 'EMAIL'/);
 });
+
+test('settings and backup controls are persisted and access-controlled', () => {
+  const schema = source('prisma/schema.prisma');
+  const routes = source('src/routes/settings.routes.js');
+  const settings = source('src/controllers/settings.controller.js');
+  assert.match(schema, /model PlatformSetting/);
+  assert.match(routes, /authorize\('SUPER_ADMIN', 'ADMIN'\)/);
+  assert.match(settings, /prisma\.platformSetting\.upsert/);
+  assert.match(settings, /pg_dump/);
+});

@@ -29,9 +29,10 @@ function errorHandler(err, req, res, next) {
   }
   if (statusCode >= 500) trackError(err, req, statusCode);
   res.status(statusCode).json({
-    message: err.message || 'Internal server error',
-    ...(err.code ? { code: err.code } : {}),
-    ...(err.details ? { details: err.details } : {}),
+    message: statusCode >= 500 ? 'Internal server error' : (err.message || 'Request failed'),
+    code: statusCode >= 500 ? 'INTERNAL_ERROR' : err.code,
+    ...(statusCode >= 500 ? { requestId: req.id } : {}),
+    ...(statusCode < 500 && err.details ? { details: err.details } : {}),
   });
 }
 

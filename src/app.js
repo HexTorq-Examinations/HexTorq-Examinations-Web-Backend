@@ -24,6 +24,7 @@ const departmentRoutes = require('./routes/departments.routes');
 const classRoutes = require('./routes/classes.routes');
 const auditLogRoutes = require('./routes/auditLogs.routes');
 const systemRoutes = require('./routes/system.routes');
+const settingsRoutes = require('./routes/settings.routes');
 
 const app = express();
 
@@ -74,6 +75,7 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/classes', classRoutes);
 app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

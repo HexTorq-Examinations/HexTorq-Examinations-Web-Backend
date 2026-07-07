@@ -496,6 +496,7 @@ const myHistory = asyncHandler(async (req, res) => {
       examTitle: a.exam.title,
       examSubject: a.exam.subject,
       totalMarks: a.exam.totalMarks,
+      isTestExam: a.exam.isTestExam,
       status: a.status,
       resultStatus: isPublished ? 'Published' : 'Pending Evaluation',
       score: isPublished ? a.score : null,
