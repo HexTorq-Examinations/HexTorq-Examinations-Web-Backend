@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const { scoreAttemptSnapshot } = require('../utils/scoring');
 const PDFDocument = require('pdfkit');
 const crypto = require('crypto');
+const { getResolvedSettings } = require('../utils/platformSettings');
 
 // Unbiased Fisher-Yates shuffle. Never mutates the input array.
 const shuffle = (arr) => {
@@ -60,6 +61,12 @@ const calculateScore = async (attempt) => {
   });
 };
 
+const resolveFinalStatus = (attempt, requestedStatus) => {
+  if (requestedStatus !== 'COMPLETED') return requestedStatus;
+  const violationCount = Array.isArray(attempt?.violations) ? attempt.violations.length : 0;
+  return violationCount >= (attempt?.maxViolations || 0) ? 'TERMINATED' : 'COMPLETED';
+};
+
 const ensurePendingResult = async (examId) => {
   const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { organizationId: true } });
   await prisma.result.upsert({
@@ -77,9 +84,10 @@ const completeFinalizingAttempt = async (attemptId, finalStatus, endedAt) => {
   // Read answers only after claiming the attempt. No answer endpoint accepts the
   // FINALIZING state, so this is a stable server-side snapshot for scoring.
   const score = await calculateScore(frozenAttempt);
+  const resolvedFinalStatus = resolveFinalStatus(frozenAttempt, finalStatus);
   const completed = await prisma.examAttempt.updateMany({
     where: { id: attemptId, status: 'FINALIZING' },
-    data: { status: finalStatus, endedAt, score },
+    data: { status: resolvedFinalStatus, endedAt, score },
   });
   if (completed.count > 0) await ensurePendingResult(frozenAttempt.examId);
   return prisma.examAttempt.findUnique({ where: { id: attemptId } });
@@ -204,7 +212,7 @@ const assertStudentHasMapping = async (examId, userId) => {
 // and answers are matched by text server-side, so shuffling here cannot affect scoring.
 const getExamForTaking = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  await assertStudentHasMapping(id, req.user.id);
+  const { mapping } = await assertStudentHasMapping(id, req.user.id);
 
   const exam = await prisma.exam.findUnique({
     where: { id },
@@ -224,6 +232,7 @@ const getExamForTaking = asyncHandler(async (req, res) => {
   const snapshot = activeAttempt?.questionSnapshot?.length
     ? activeAttempt.questionSnapshot
     : buildQuestionSnapshot(exam, exam.questions);
+  const settings = await getResolvedSettings({ organizationId: exam.organizationId });
 
   res.json({
     id: exam.id,
@@ -232,6 +241,9 @@ const getExamForTaking = asyncHandler(async (req, res) => {
     duration: exam.duration,
     totalMarks: exam.totalMarks,
     negativeMarking: exam.negativeMarking,
+    strictFullscreen: settings.strictFullscreen,
+    disableClipboard: settings.disableClipboard,
+    graceMinutes: mapping.graceMinutes,
     questions: toCandidateQuestions(snapshot),
   });
 });
@@ -301,6 +313,7 @@ const startAttempt = asyncHandler(async (req, res) => {
     });
   }
   const answerRecords = await prisma.examAnswer.findMany({ where: { attemptId: attempt.id } });
+  const settings = await getResolvedSettings({ organizationId: exam.organizationId });
 
   const expiredAttempt = await finalizeIfExpired(attempt);
   if (expiredAttempt) throw new ApiError(409, 'This exam attempt has expired and was submitted automatically');
@@ -317,6 +330,8 @@ const startAttempt = asyncHandler(async (req, res) => {
     durationSeconds: Math.max(0, Math.ceil((attempt.expiresAt.getTime() - Date.now()) / 1000)),
     maxViolations: attempt.maxViolations,
     calculatorEnabled: attempt.calculatorEnabled,
+    strictFullscreen: settings.strictFullscreen,
+    disableClipboard: settings.disableClipboard,
   });
 });
 

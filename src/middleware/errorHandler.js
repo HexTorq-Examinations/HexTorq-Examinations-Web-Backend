@@ -8,7 +8,7 @@ function notFoundHandler(req, res, next) {
 }
 
 function errorHandler(err, req, res, next) {
-  if (err instanceof multer.MulterError || /only \.(xlsx|xls|csv)|only image uploads/i.test(err.message || '')) {
+  if (err instanceof multer.MulterError || /only \.(xlsx|csv)|only image uploads/i.test(err.message || '')) {
     return res.status(400).json({ message: err.message || 'File upload failed' });
   }
 

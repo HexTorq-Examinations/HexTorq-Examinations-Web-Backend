@@ -1,6 +1,7 @@
 require('dotenv').config();
 const app = require('./app');
 const { startDeadlineWorker } = require('./workers/deadlineWorker');
+const { startBackupWorker } = require('./workers/backupWorker');
 
 const PORT = process.env.PORT || 4000;
 
@@ -17,9 +18,15 @@ const deadlineWorker = process.env.DEADLINE_WORKER_MODE === 'external'
       pollIntervalMs: Number(process.env.DEADLINE_POLL_INTERVAL_MS) || 2000,
       batchSize: Number(process.env.DEADLINE_BATCH_SIZE) || 25,
     });
+const backupWorker = process.env.BACKUP_WORKER_MODE === 'external'
+  ? null
+  : startBackupWorker({
+      pollIntervalMs: Number(process.env.BACKUP_POLL_INTERVAL_MS) || 15 * 60 * 1000,
+    });
 
 const shutdown = () => {
   deadlineWorker?.stop();
+  backupWorker?.stop();
   server.close(() => process.exit(0));
 };
 process.on('SIGTERM', shutdown);

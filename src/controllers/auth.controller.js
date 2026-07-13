@@ -7,6 +7,8 @@ const { sendPasswordResetEmail } = require('../utils/mailer');
 const {
   REFRESH_COOKIE, hashToken, readCookie, issueRefreshToken, clearRefreshCookie, createPasswordResetToken,
 } = require('../utils/authTokens');
+const { getResolvedSettingsForUser } = require('../utils/platformSettings');
+const { assertIpAllowed, assertSessionWithinTimeout } = require('../utils/runtimeSecurity');
 
 const signToken = (user, sessionId) =>
   jwt.sign({ sub: user.id, role: user.role, sid: sessionId }, process.env.JWT_SECRET, {
@@ -44,6 +46,8 @@ const login = asyncHandler(async (req, res) => {
   if (!valid) throw new ApiError(401, 'Invalid credentials');
 
   if (user.status !== 'Active') throw new ApiError(403, 'Your account has been deactivated');
+  const settings = await getResolvedSettingsForUser(user);
+  assertIpAllowed({ req, settings, user });
 
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
@@ -79,6 +83,17 @@ const refresh = asyncHandler(async (req, res) => {
   if (['ADMIN', 'STUDENT'].includes(stored.user.role) && !stored.user.organizationId) {
     throw new ApiError(403, 'Account is not assigned to an organization');
   }
+  const settings = await getResolvedSettingsForUser(stored.user);
+  try {
+    assertSessionWithinTimeout({ user: stored.user, settings });
+  } catch (error) {
+    if (error instanceof ApiError && /Session timed out/i.test(error.message)) {
+      await prisma.refreshToken.updateMany({ where: { userId: stored.user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      clearRefreshCookie(res);
+    }
+    throw error;
+  }
+  assertIpAllowed({ req, settings, user: stored.user });
 
   await prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
   const session = await issueRefreshToken(stored.user.id, res);

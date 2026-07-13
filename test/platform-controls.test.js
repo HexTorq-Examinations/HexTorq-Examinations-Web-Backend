@@ -57,8 +57,21 @@ test('settings and backup controls are persisted and access-controlled', () => {
   const schema = source('prisma/schema.prisma');
   const routes = source('src/routes/settings.routes.js');
   const settings = source('src/controllers/settings.controller.js');
+  const backupService = source('src/utils/backupService.js');
+  const backupWorker = source('src/workers/backupWorker.js');
   assert.match(schema, /model PlatformSetting/);
   assert.match(routes, /authorize\('SUPER_ADMIN', 'ADMIN'\)/);
   assert.match(settings, /prisma\.platformSetting\.upsert/);
-  assert.match(settings, /pg_dump/);
+  assert.match(backupService, /pg_dump/);
+  assert.match(backupService, /includeMedia/);
+  assert.match(backupWorker, /backupFrequency/);
+  assert.match(backupWorker, /createDatabaseBackup/);
+});
+
+test('chat history loads the newest 200 messages while returning them chronologically', () => {
+  const messaging = source('src/controllers/messaging.controller.js');
+  assert.match(messaging, /const getMessages = asyncHandler/);
+  assert.match(messaging, /orderBy: \{ createdAt: 'desc' \}/);
+  assert.match(messaging, /take: 200/);
+  assert.match(messaging, /messages\.reverse\(\)/);
 });

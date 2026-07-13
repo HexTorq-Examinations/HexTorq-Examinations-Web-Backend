@@ -1,14 +1,14 @@
 const multer = require('multer');
 const path = require('path');
 
-const ALLOWED_EXTENSIONS = new Set(['.xlsx', '.xls', '.csv']);
+const ALLOWED_EXTENSIONS = new Set(['.xlsx', '.csv']);
 
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return cb(new Error('Only .xlsx, .xls, or .csv files are allowed'));
+    return cb(new Error('Only .xlsx or .csv files are allowed'));
   }
   cb(null, true);
 };

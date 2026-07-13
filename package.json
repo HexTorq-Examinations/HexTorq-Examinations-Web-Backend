@@ -27,7 +27,10 @@
     "@prisma/client": "^6.3.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.5.2",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
@@ -36,13 +39,15 @@
     "nodemailer": "^9.0.3",
     "pdfkit": "^0.19.1",
     "pino": "^10.3.1",
-    "pino-http": "^11.0.0",
-    "xlsx": "^0.18.5"
+    "pino-http": "^11.0.0"
   },
   "devDependencies": {
     "prisma": "^6.3.1"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   }
 }

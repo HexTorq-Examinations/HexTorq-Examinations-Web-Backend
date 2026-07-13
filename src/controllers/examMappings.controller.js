@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const { assertOwnedClass } = require('./classes.controller');
 const { ensureClassGroupConversation, postSystemMessage } = require('./messaging.controller');
 const { DateTime } = require('luxon');
+const { getResolvedSettingsForUser } = require('../utils/platformSettings');
 
 const toPublic = (m) => {
   const start = DateTime.fromJSDate(m.startAt, { zone: 'utc' }).setZone(m.timezone);
@@ -97,7 +98,7 @@ const list = asyncHandler(async (req, res) => {
 
 // POST /api/exam-mappings { examId, classId, date, startTime, endTime, hall, status }
 const create = asyncHandler(async (req, res) => {
-  const { examId, classId, date, startTime, endTime, hall, status, graceMinutes = 0, confirmOverlap = false } = req.body;
+  const { examId, classId, date, startTime, endTime, hall, status, graceMinutes, confirmOverlap = false } = req.body;
   if (!examId || !classId || !date || !startTime || !endTime) {
     throw new ApiError(400, 'examId, classId, date, startTime, and endTime are required');
   }
@@ -110,12 +111,16 @@ const create = asyncHandler(async (req, res) => {
   const { startAt, endAt } = buildWindow(date, startTime, endTime, timezone);
   const existing = await prisma.examMapping.findUnique({ where: { examId_classId: { examId, classId } } });
   await assertNoOverlap({ classId, startAt, endAt, excludeId: existing?.id, confirmed: confirmOverlap });
+  const settings = await getResolvedSettingsForUser(req.user);
+  const resolvedGraceMinutes = graceMinutes === undefined || graceMinutes === null || graceMinutes === ''
+    ? settings.defaultGraceMinutes
+    : Math.max(0, Number(graceMinutes) || 0);
 
   const mapping = await prisma.$transaction(async (tx) => {
     const saved = await tx.examMapping.upsert({
       where: { examId_classId: { examId, classId } },
-      update: { date: startAt, startTime, endTime, timezone, startAt, endAt, graceMinutes: Math.max(0, Number(graceMinutes) || 0), hall: hall || 'Virtual', status: status || 'Scheduled' },
-      create: { examId, classId, date: startAt, startTime, endTime, timezone, startAt, endAt, graceMinutes: Math.max(0, Number(graceMinutes) || 0), hall: hall || 'Virtual', status: status || 'Scheduled' },
+      update: { date: startAt, startTime, endTime, timezone, startAt, endAt, graceMinutes: resolvedGraceMinutes, hall: hall || 'Virtual', status: status || 'Scheduled' },
+      create: { examId, classId, date: startAt, startTime, endTime, timezone, startAt, endAt, graceMinutes: resolvedGraceMinutes, hall: hall || 'Virtual', status: status || 'Scheduled' },
       include: { exam: { include: { _count: { select: { questions: true } } } }, class: true },
     });
     const conversationId = await ensureClassGroupConversation(classId, req.user.id, tx);

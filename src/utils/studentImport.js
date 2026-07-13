@@ -1,4 +1,4 @@
-const XLSX = require('xlsx');
+const { buildTableBuffer, readRowsFromBuffer } = require('./tabularFiles');
 
 const MAX_ROWS = 500;
 const TEMPLATE_HEADERS = ['Name', 'RegisterNumber', 'Email', 'Phone', 'Password', 'Status'];
@@ -11,23 +11,16 @@ const TEMPLATE_ROWS = [
 const normalizeHeader = (h) => String(h || '').trim().toLowerCase().replace(/\s+/g, '');
 const VALID_STATUSES = new Set(['active', 'inactive', 'suspended']);
 
-// Parses an uploaded workbook buffer (.xlsx / .xls / .csv) into { students, errors }.
+// Parses an uploaded workbook buffer (.xlsx / .csv) into { students, errors }.
 // The class the students land in comes from where the admin is importing (a specific
 // Class in the academic hierarchy), not from a column in the file.
-function parseStudentsWorkbook(buffer) {
-  let workbook;
+async function parseStudentsWorkbook(buffer, filename) {
+  let rows;
   try {
-    workbook = XLSX.read(buffer, { type: 'buffer' });
+    rows = await readRowsFromBuffer(buffer, filename);
   } catch (err) {
-    return { students: [], errors: [{ row: 0, error: 'The file could not be read. Make sure it is a valid .xlsx, .xls, or .csv file.' }] };
+    return { students: [], errors: [{ row: 0, error: 'The file could not be read. Make sure it is a valid .xlsx or .csv file.' }] };
   }
-
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    return { students: [], errors: [{ row: 0, error: 'The file has no sheets/data.' }] };
-  }
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
 
   if (rows.length === 0) {
     return { students: [], errors: [{ row: 0, error: 'The file is empty.' }] };
@@ -55,7 +48,7 @@ function parseStudentsWorkbook(buffer) {
     };
   }
 
-  const dataRows = rows.slice(1).slice(0, MAX_ROWS);
+  const dataRows = rows.slice(1, MAX_ROWS + 1);
   if (rows.length - 1 > MAX_ROWS) {
     return { students: [], errors: [{ row: 0, error: `Too many rows. Maximum ${MAX_ROWS} students per import.` }] };
   }
@@ -105,15 +98,7 @@ function parseStudentsWorkbook(buffer) {
 }
 
 function generateTemplateBuffer(format) {
-  const worksheet = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, ...TEMPLATE_ROWS]);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Students');
-
-  const bookTypeMap = { xlsx: 'xlsx', xls: 'biff8', csv: 'csv' };
-  const bookType = bookTypeMap[format];
-  if (!bookType) throw new Error('Unsupported template format');
-
-  return XLSX.write(workbook, { type: 'buffer', bookType });
+  return buildTableBuffer([TEMPLATE_HEADERS, ...TEMPLATE_ROWS], 'Students', format);
 }
 
 module.exports = { parseStudentsWorkbook, generateTemplateBuffer, MAX_ROWS };

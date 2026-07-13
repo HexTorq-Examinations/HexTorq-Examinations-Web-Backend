@@ -1,4 +1,4 @@
-const XLSX = require('xlsx');
+const { buildTableBuffer, readRowsFromBuffer } = require('./tabularFiles');
 
 const MAX_ROWS = 500;
 const TEMPLATE_HEADERS = ['Question', 'Type', 'Marks', 'Difficulty', 'Option1', 'Option2', 'Option3', 'Option4', 'Answer'];
@@ -10,22 +10,15 @@ const TEMPLATE_ROWS = [
 
 const normalizeHeader = (h) => String(h || '').trim().toLowerCase().replace(/\s+/g, '');
 
-// Parses an uploaded workbook buffer (.xlsx / .xls / .csv) into { questions, errors }.
+// Parses an uploaded workbook buffer (.xlsx / .csv) into { questions, errors }.
 // `defaults` supplies subject/marks/difficulty/type when the sheet doesn't provide its own columns.
-function parseQuestionsWorkbook(buffer, defaults) {
-  let workbook;
+async function parseQuestionsWorkbook(buffer, filename, defaults) {
+  let rows;
   try {
-    workbook = XLSX.read(buffer, { type: 'buffer' });
+    rows = await readRowsFromBuffer(buffer, filename);
   } catch (err) {
-    return { questions: [], errors: [{ row: 0, error: 'The file could not be read. Make sure it is a valid .xlsx, .xls, or .csv file.' }] };
+    return { questions: [], errors: [{ row: 0, error: 'The file could not be read. Make sure it is a valid .xlsx or .csv file.' }] };
   }
-
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    return { questions: [], errors: [{ row: 0, error: 'The file has no sheets/data.' }] };
-  }
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
 
   if (rows.length === 0) {
     return { questions: [], errors: [{ row: 0, error: 'The file is empty.' }] };
@@ -56,7 +49,7 @@ function parseQuestionsWorkbook(buffer, defaults) {
     };
   }
 
-  const dataRows = rows.slice(1).slice(0, MAX_ROWS);
+  const dataRows = rows.slice(1, MAX_ROWS + 1);
   if (rows.length - 1 > MAX_ROWS) {
     return { questions: [], errors: [{ row: 0, error: `Too many rows. Maximum ${MAX_ROWS} questions per import.` }] };
   }
@@ -155,15 +148,7 @@ function parseQuestionsWorkbook(buffer, defaults) {
 
 // Generates a downloadable template file in the requested format.
 function generateTemplateBuffer(format) {
-  const worksheet = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, ...TEMPLATE_ROWS]);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions');
-
-  const bookTypeMap = { xlsx: 'xlsx', xls: 'biff8', csv: 'csv' };
-  const bookType = bookTypeMap[format];
-  if (!bookType) throw new Error('Unsupported template format');
-
-  return XLSX.write(workbook, { type: 'buffer', bookType });
+  return buildTableBuffer([TEMPLATE_HEADERS, ...TEMPLATE_ROWS], 'Questions', format);
 }
 
 module.exports = { parseQuestionsWorkbook, generateTemplateBuffer, MAX_ROWS };

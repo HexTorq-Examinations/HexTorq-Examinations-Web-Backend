@@ -173,10 +173,11 @@ const getMessages = asyncHandler(async (req, res) => {
 
   const messages = await prisma.message.findMany({
     where: { conversationId: id },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { createdAt: 'desc' },
     take: 200,
     include: { sender: { select: { id: true, name: true } } },
   });
+  messages.reverse();
 
   await prisma.conversationParticipant.update({
     where: { conversationId_userId: { conversationId: id, userId: req.user.id } },

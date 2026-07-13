@@ -18,6 +18,9 @@ test('access tokens are short-lived and bound to a revocable session', () => {
   assert.match(auth, /sid: sessionId/);
   assert.match(middleware, /id: payload\.sid/);
   assert.match(middleware, /revokedAt: null/);
+  assert.match(middleware, /assertSessionWithinTimeout/);
+  assert.match(middleware, /assertIpAllowed/);
+  assert.match(auth, /getResolvedSettingsForUser/);
 });
 
 test('password reset revokes all active refresh sessions', () => {

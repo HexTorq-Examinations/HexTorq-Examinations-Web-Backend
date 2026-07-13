@@ -2,7 +2,7 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const PDFDocument = require('pdfkit');
-const XLSX = require('xlsx');
+const { buildJsonBuffer } = require('../utils/tabularFiles');
 
 const REPORTS = new Set(['student-performance', 'attendance-activity', 'exam-analysis', 'question-analytics']);
 const TITLES = {
@@ -20,6 +20,36 @@ const orgId = (req) => req.user.role === 'ADMIN' ? req.user.organizationId : und
 const examScope = (req) => ({ ...(orgId(req) ? { organizationId: orgId(req) } : {}), isTestExam: false });
 const studentScope = (req) => orgId(req) ? { organizationId: orgId(req) } : {};
 const round = (value, digits = 1) => Number((Number(value) || 0).toFixed(digits));
+const latestAttemptTime = (attempt) => new Date(attempt.endedAt || attempt.startedAt || 0).getTime();
+
+const sameSubjectImprovement = (attempts) => {
+  const bySubject = new Map();
+  attempts.forEach((attempt) => {
+    const subject = attempt.exam?.subject || 'Unknown';
+    const bucket = bySubject.get(subject) || [];
+    bucket.push(attempt);
+    bySubject.set(subject, bucket);
+  });
+
+  const candidates = [...bySubject.values()]
+    .map((subjectAttempts) => subjectAttempts.sort((a, b) => latestAttemptTime(a) - latestAttemptTime(b)))
+    .filter((subjectAttempts) => subjectAttempts.length > 1);
+
+  if (candidates.length === 0) return 0;
+
+  candidates.sort((a, b) => {
+    const latestDiff = latestAttemptTime(b.at(-1)) - latestAttemptTime(a.at(-1));
+    if (latestDiff !== 0) return latestDiff;
+    return b.length - a.length;
+  });
+
+  const chosen = candidates[0];
+  const first = chosen[0];
+  const last = chosen.at(-1);
+  const firstPct = first.exam.totalMarks ? first.score / first.exam.totalMarks * 100 : 0;
+  const lastPct = last.exam.totalMarks ? last.score / last.exam.totalMarks * 100 : 0;
+  return round(lastPct - firstPct);
+};
 
 const performanceRows = async (req, range) => {
   const attempts = await prisma.examAttempt.findMany({
@@ -28,26 +58,39 @@ const performanceRows = async (req, range) => {
   });
   const byStudent = new Map();
   attempts.forEach(a => {
-    const item = byStudent.get(a.userId) || { user: a.user, scores: [] };
-    item.scores.push(a.exam.totalMarks ? a.score / a.exam.totalMarks * 100 : 0); byStudent.set(a.userId, item);
+    const item = byStudent.get(a.userId) || { user: a.user, scores: [], attempts: [] };
+    item.scores.push(a.exam.totalMarks ? a.score / a.exam.totalMarks * 100 : 0);
+    item.attempts.push(a);
+    byStudent.set(a.userId, item);
   });
-  const rows = [...byStudent.values()].map(({ user, scores }) => ({
+  const rows = [...byStudent.values()].map(({ user, scores, attempts: studentAttempts }) => ({
     'Register Number': user.studentProfile?.registerNumber || '', Student: user.name, Exams: scores.length,
     'Average %': round(scores.reduce((s, v) => s + v, 0) / scores.length), 'Best %': round(Math.max(...scores)),
-    'Improvement %': scores.length > 1 ? round(scores.at(-1) - scores[0]) : 0,
+    'Improvement %': sameSubjectImprovement(studentAttempts),
   })).sort((a, b) => b['Average %'] - a['Average %']);
   rows.forEach((row, index) => { row.Percentile = rows.length > 1 ? round((rows.length - index - 1) / (rows.length - 1) * 100) : 100; });
   return rows;
 };
 
 const attendanceRows = async (req, range) => {
+  const mappingWindow = dateWhere(range);
   const students = await prisma.user.findMany({
     where: { role: 'STUDENT', ...studentScope(req), ...(dateWhere(range) ? { OR: [{ lastLoginAt: dateWhere(range) }, { examAttempts: { some: { startedAt: dateWhere(range) } } }] } : {}) },
-    include: { studentProfile: { include: { class: { include: { _count: { select: { examMappings: true } } } } } }, examAttempts: { where: dateWhere(range) ? { startedAt: dateWhere(range) } : {}, select: { status: true } } },
+    include: { studentProfile: true, examAttempts: { where: dateWhere(range) ? { startedAt: dateWhere(range) } : {}, select: { status: true } } },
     orderBy: { name: 'asc' },
   });
+  const classIds = [...new Set(students.map((user) => user.studentProfile?.classId).filter(Boolean))];
+  const mappings = classIds.length === 0 ? [] : await prisma.examMapping.findMany({
+    where: {
+      classId: { in: classIds },
+      ...(mappingWindow ? { startAt: mappingWindow } : {}),
+      exam: examScope(req),
+    },
+    select: { classId: true },
+  });
+  const assignedByClass = mappings.reduce((map, mapping) => map.set(mapping.classId, (map.get(mapping.classId) || 0) + 1), new Map());
   return students.map(user => {
-    const assigned = user.studentProfile?.class?._count.examMappings || 0;
+    const assigned = user.studentProfile?.classId ? (assignedByClass.get(user.studentProfile.classId) || 0) : 0;
     const completed = user.examAttempts.filter(a => ['COMPLETED', 'TERMINATED'].includes(a.status)).length;
     return { 'Register Number': user.studentProfile?.registerNumber || '', Student: user.name, 'Last Login': user.lastLoginAt?.toISOString() || 'Never', 'Attempts Started': user.examAttempts.length, 'Exams Completed': completed, 'Assigned Exams': assigned, 'Completion Rate %': assigned ? round(completed / assigned * 100) : 0 };
   });
@@ -106,13 +149,12 @@ const generate = asyncHandler(async (req, res) => {
   if (format === 'json') return res.json({ title: TITLES[type], range, generatedAt: new Date().toISOString(), rows });
   if (format === 'pdf') return sendPdf(res, TITLES[type], rows, filename);
   if (format === 'xlsx') {
-    const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows), 'Report');
-    const buffer = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+    const buffer = await buildJsonBuffer(rows, 'Report', 'xlsx');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`); return res.send(buffer);
   }
   if (format !== 'csv') throw new ApiError(400, 'format must be json, pdf, csv, or xlsx');
-  const sheet = XLSX.utils.json_to_sheet(rows); const csv = XLSX.utils.sheet_to_csv(sheet);
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`); res.send(`\uFEFF${csv}`);
+  const csv = await buildJsonBuffer(rows, 'Report', 'csv');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`); res.send(csv);
 });
 
 module.exports = { generate };

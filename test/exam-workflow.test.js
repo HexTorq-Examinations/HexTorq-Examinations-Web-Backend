@@ -19,6 +19,8 @@ test('schedule overlap requires explicit confirmation', () => {
   assert.match(source, /confirmOverlap/);
   assert.match(source, /startAt: \{ lt: endAt \}/);
   assert.match(source, /endAt: \{ gt: startAt \}/);
+  assert.match(source, /settings\.defaultGraceMinutes/);
+  assert.match(source, /resolvedGraceMinutes/);
 });
 
 test('attempt administration requires recorded reasons', () => {
@@ -39,6 +41,16 @@ test('exam delivery settings are frozen onto each attempt', () => {
   assert.match(attempts, /violations\.length >= locked\.maxViolations/);
   assert.match(attempts, /completeFinalizingAttempt\(recorded\.attempt\.id, 'TERMINATED'/);
   assert.match(attempts, /status: 'FINALIZING'/);
+  assert.match(attempts, /strictFullscreen: settings\.strictFullscreen/);
+  assert.match(attempts, /disableClipboard: settings\.disableClipboard/);
+});
+
+test('stale FINALIZING attempts preserve violation termination during worker retries', () => {
+  const attempts = source('src/controllers/examAttempts.controller.js');
+  assert.match(attempts, /const resolveFinalStatus =/);
+  assert.match(attempts, /requestedStatus !== 'COMPLETED'/);
+  assert.match(attempts, /violationCount >= \(attempt\?\.maxViolations \|\| 0\) \? 'TERMINATED' : 'COMPLETED'/);
+  assert.match(attempts, /const resolvedFinalStatus = resolveFinalStatus\(frozenAttempt, finalStatus\)/);
 });
 
 test('attempt response PDF uses the owned frozen attempt', () => {
@@ -58,4 +70,12 @@ test('official results wait for exam completion and exclude test exams', () => {
   assert.match(results, /Students still have active attempts/);
   assert.match(results, /isTestExam: false/);
   assert.match(reports, /isTestExam: false/);
+});
+
+test('reports use date-scoped assignments and same-subject improvement', () => {
+  const reports = source('src/controllers/reports.controller.js');
+  assert.match(reports, /const sameSubjectImprovement =/);
+  assert.match(reports, /const mappingWindow = dateWhere\(range\)/);
+  assert.match(reports, /startAt: mappingWindow/);
+  assert.match(reports, /'Improvement %': sameSubjectImprovement\(studentAttempts\)/);
 });

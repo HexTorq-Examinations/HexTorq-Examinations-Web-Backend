@@ -151,7 +151,7 @@ const importFromFile = asyncHandler(async (req, res) => {
   if (!classId) throw new ApiError(400, 'classId is required');
   const cls = await assertOwnedClass(classId, req.user.organizationId);
 
-  const { students, errors } = parseStudentsWorkbook(req.file.buffer);
+  const { students, errors } = await parseStudentsWorkbook(req.file.buffer, req.file.originalname);
 
   if (errors.length > 0) {
     return res.status(400).json({ message: 'The file has errors and was not imported.', errors });
@@ -241,12 +241,11 @@ const downloadTemplate = asyncHandler(async (req, res) => {
   const format = (req.query.format || 'xlsx').toLowerCase();
   const mimeTypes = {
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    xls: 'application/vnd.ms-excel',
     csv: 'text/csv',
   };
-  if (!mimeTypes[format]) throw new ApiError(400, 'format must be one of: xlsx, xls, csv');
+  if (!mimeTypes[format]) throw new ApiError(400, 'format must be one of: xlsx, csv');
 
-  const buffer = generateTemplateBuffer(format);
+  const buffer = await generateTemplateBuffer(format);
   res.setHeader('Content-Type', mimeTypes[format]);
   res.setHeader('Content-Disposition', `attachment; filename="student-import-template.${format}"`);
   res.send(buffer);
