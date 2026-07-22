@@ -14,6 +14,7 @@ test('refresh and reset tokens are stored as hashes', () => {
 test('access tokens are short-lived and bound to a revocable session', () => {
   const auth = source('src/controllers/auth.controller.js');
   const middleware = source('src/middleware/auth.js');
+  const runtimeSecurity = source('src/utils/runtimeSecurity.js');
   assert.match(auth, /JWT_EXPIRES_IN \|\| '15m'/);
   assert.match(auth, /sid: sessionId/);
   assert.match(middleware, /id: payload\.sid/);
@@ -21,6 +22,7 @@ test('access tokens are short-lived and bound to a revocable session', () => {
   assert.match(middleware, /assertSessionWithinTimeout/);
   assert.match(middleware, /assertIpAllowed/);
   assert.match(auth, /getResolvedSettingsForUser/);
+  assert.match(runtimeSecurity, /user\?\.role === 'STUDENT'/);
 });
 
 test('password reset revokes all active refresh sessions', () => {

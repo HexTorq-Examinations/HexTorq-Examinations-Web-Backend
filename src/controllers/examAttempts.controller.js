@@ -178,6 +178,28 @@ const finalizeIfExpired = async (attempt) => {
   return finalizeAttempt(attempt, 'COMPLETED', attempt.expiresAt);
 };
 
+const mappingDeadline = (mapping, profile) => new Date(
+  mapping.endAt.getTime() + (mapping.graceMinutes + Math.max(0, profile.extraTimeMinutes || 0)) * 60 * 1000
+);
+
+const syncActiveAttemptDeadline = async (attempt, mapping, profile) => {
+  if (!attempt || attempt.status !== 'IN_PROGRESS') return attempt;
+  const deadline = mappingDeadline(mapping, profile);
+  if (attempt.expiresAt && (attempt.expiresAt.getTime() >= deadline.getTime() || attempt.expiresAt.getTime() > Date.now())) {
+    return attempt;
+  }
+  const updated = await prisma.examAttempt.update({
+    where: { id: attempt.id },
+    data: { expiresAt: deadline },
+  });
+  await prisma.attemptDeadlineJob.upsert({
+    where: { attemptId: attempt.id },
+    update: { runAt: deadline, status: 'PENDING', completedAt: null, lockedAt: null, lockedBy: null },
+    create: { attemptId: attempt.id, runAt: deadline },
+  });
+  return updated;
+};
+
 // A student may only view/start an exam once it's been mapped to their Class —
 // this is what Exam Mapping actually assigns. Throws 403 if no mapping exists,
 // if the exam's scheduled window hasn't opened yet or has already closed, or if
@@ -200,7 +222,7 @@ const assertStudentHasMapping = async (examId, userId) => {
 
   const now = new Date();
   if (now < mapping.startAt) throw new ApiError(403, 'This exam has not started yet');
-  const effectiveEnd = new Date(mapping.endAt.getTime() + (mapping.graceMinutes + Math.max(0, profile.extraTimeMinutes || 0)) * 60 * 1000);
+  const effectiveEnd = mappingDeadline(mapping, profile);
   if (now > effectiveEnd) throw new ApiError(403, 'This exam window has already ended');
 
   return { mapping, profile };
@@ -212,7 +234,7 @@ const assertStudentHasMapping = async (examId, userId) => {
 // and answers are matched by text server-side, so shuffling here cannot affect scoring.
 const getExamForTaking = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { mapping } = await assertStudentHasMapping(id, req.user.id);
+  const { mapping, profile } = await assertStudentHasMapping(id, req.user.id);
 
   const exam = await prisma.exam.findUnique({
     where: { id },
@@ -226,6 +248,7 @@ const getExamForTaking = asyncHandler(async (req, res) => {
   let activeAttempt = await prisma.examAttempt.findFirst({
     where: { examId: id, userId: req.user.id, status: 'IN_PROGRESS' },
   });
+  activeAttempt = await syncActiveAttemptDeadline(activeAttempt, mapping, profile);
   if (activeAttempt) {
     activeAttempt = await ensureQuestionSnapshot(activeAttempt);
   }
@@ -301,6 +324,7 @@ const startAttempt = asyncHandler(async (req, res) => {
     const expiresAt = new Date(attempt.startedAt.getTime() + exam.duration * 60 * 1000);
     attempt = await prisma.examAttempt.update({ where: { id: attempt.id }, data: { expiresAt } });
   }
+  attempt = await syncActiveAttemptDeadline(attempt, mapping, profile);
   attempt = await ensureQuestionSnapshot(attempt);
   if (attempt.expiresAt) {
     await prisma.attemptDeadlineJob.upsert({
@@ -525,6 +549,7 @@ const myHistory = asyncHandler(async (req, res) => {
 // can never start the clock on an exam.
 const myAttemptStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const { mapping, profile } = await assertStudentHasMapping(id, req.user.id);
   const [attempt, latestFinished, totalQuestions] = await Promise.all([
     prisma.examAttempt.findFirst({
       where: { examId: id, userId: req.user.id, status: 'IN_PROGRESS' },
@@ -536,8 +561,9 @@ const myAttemptStatus = asyncHandler(async (req, res) => {
     }),
     prisma.question.count({ where: { examId: id } }),
   ]);
-  const finalized = attempt ? await finalizeIfExpired(attempt) : null;
-  const activeAttempt = finalized ? null : attempt;
+  const refreshedAttempt = await syncActiveAttemptDeadline(attempt, mapping, profile);
+  const finalized = refreshedAttempt ? await finalizeIfExpired(refreshedAttempt) : null;
+  const activeAttempt = finalized ? null : refreshedAttempt;
   const receiptAttempt = finalized || (!activeAttempt ? latestFinished : null);
   const serverNow = new Date().toISOString();
   res.json({

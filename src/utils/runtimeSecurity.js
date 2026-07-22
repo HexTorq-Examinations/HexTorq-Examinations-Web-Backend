@@ -33,6 +33,9 @@ const assertIpAllowed = ({ req, settings, user }) => {
 };
 
 const assertSessionWithinTimeout = ({ user, settings }) => {
+  // Student exam attempts are governed by server attempt deadlines. Applying an
+  // absolute login-age cutoff here can interrupt a valid live exam when tokens refresh.
+  if (user?.role === 'STUDENT') return;
   const timeoutMinutes = Number(settings?.sessionTimeoutMinutes) || 30;
   const loginAt = user?.lastLoginAt ? new Date(user.lastLoginAt) : null;
   if (!loginAt || Number.isNaN(loginAt.getTime())) return;
