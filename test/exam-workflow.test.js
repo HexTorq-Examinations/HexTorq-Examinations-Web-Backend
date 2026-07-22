@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateQuestion } = require('../src/controllers/questions.controller');
 const { parseQuestionsWorkbook } = require('../src/utils/questionImport');
+const { simplifyImportedDateOption, repairQuestionOptions } = require('../src/utils/questionOptionRepair');
 const ExcelJS = require('exceljs');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -109,4 +110,23 @@ test('question import preserves slash-style options that Excel auto-converts to 
   assert.deepEqual(errors, []);
   assert.deepEqual(questions[0].options, ['1/13', '1/52', '4/15', '4/13']);
   assert.equal(questions[0].correctAnswer, 0);
+});
+
+test('question option repair cleans already-imported JavaScript date strings', () => {
+  assert.equal(
+    simplifyImportedDateOption('Sun Jan 04 2026 00:00:00 GMT+0000 (Coordinated Universal Time)'),
+    '1/4'
+  );
+  assert.equal(
+    simplifyImportedDateOption('Sat Dec 30 1899 12:17:00 GMT+0000 (Coordinated Universal Time)'),
+    '12:17'
+  );
+  const repaired = repairQuestionOptions([
+    'Sat Dec 30 1899 12:17:00 GMT+0000 (Coordinated Universal Time)',
+    '4:5',
+    '2:3',
+    'Sat Dec 30 1899 10:21:00 GMT+0000 (Coordinated Universal Time)',
+  ]);
+  assert.equal(repaired.changed, true);
+  assert.deepEqual(repaired.options, ['12:17', '4:5', '2:3', '10:21']);
 });
