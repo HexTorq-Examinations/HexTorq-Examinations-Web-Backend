@@ -252,6 +252,9 @@ const getExamForTaking = asyncHandler(async (req, res) => {
   if (activeAttempt) {
     activeAttempt = await ensureQuestionSnapshot(activeAttempt);
   }
+  const answerRecords = activeAttempt
+    ? await prisma.examAnswer.findMany({ where: { attemptId: activeAttempt.id } })
+    : [];
   const snapshot = activeAttempt?.questionSnapshot?.length
     ? activeAttempt.questionSnapshot
     : buildQuestionSnapshot(exam, exam.questions);
@@ -267,6 +270,17 @@ const getExamForTaking = asyncHandler(async (req, res) => {
     strictFullscreen: settings.strictFullscreen,
     disableClipboard: settings.disableClipboard,
     graceMinutes: mapping.graceMinutes,
+    hasActiveAttempt: !!activeAttempt,
+    attemptId: activeAttempt?.id || null,
+    status: activeAttempt?.status || null,
+    answers: activeAttempt ? (answerRecords.length > 0 ? answerRecordsToMap(answerRecords) : activeAttempt.answers) : {},
+    violations: activeAttempt?.violations || [],
+    serverNow: new Date().toISOString(),
+    startedAt: activeAttempt?.startedAt?.toISOString() || null,
+    expiresAt: activeAttempt?.expiresAt?.toISOString() || null,
+    durationSeconds: activeAttempt?.expiresAt ? Math.max(0, Math.ceil((activeAttempt.expiresAt.getTime() - Date.now()) / 1000)) : null,
+    maxViolations: activeAttempt?.maxViolations || exam.maxViolations,
+    calculatorEnabled: activeAttempt?.calculatorEnabled ?? exam.calculatorEnabled,
     questions: toCandidateQuestions(snapshot),
   });
 });
