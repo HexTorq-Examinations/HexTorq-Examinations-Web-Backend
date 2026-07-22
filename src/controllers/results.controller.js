@@ -2,7 +2,7 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const PDFDocument = require('pdfkit');
-const { scoreAttemptSnapshot } = require('../utils/scoring');
+const { answersMatch, scoreAttemptSnapshot } = require('../utils/scoring');
 const { ensureClassGroupConversation, postSystemMessage } = require('./messaging.controller');
 
 const scopeWhere = (req) => {
@@ -303,7 +303,7 @@ const attemptResponsePdf = asyncHandler(async (req, res) => {
     doc.fontSize(11).fillColor('#111827').text(`${index + 1}. ${question.text}`, { continued: false });
     doc.fontSize(9).fillColor('#475569').text(`Marks: ${question.marks}`);
     (question.options || []).forEach((option, optionIndex) => doc.text(`   ${String.fromCharCode(65 + optionIndex)}. ${option}`));
-    doc.moveDown(0.25).fillColor(selected === question.correctAnswer ? '#047857' : '#b91c1c').text(`Student answer: ${selected}`);
+    doc.moveDown(0.25).fillColor(answersMatch(selected, question.correctAnswer) ? '#047857' : '#b91c1c').text(`Student answer: ${selected}`);
     doc.fillColor('#047857').text(`Correct answer: ${question.correctAnswer}`).moveDown();
   });
   if (!snapshot.length) doc.text('No frozen questions were available for this attempt.');

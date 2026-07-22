@@ -85,7 +85,7 @@ test('reports use date-scoped assignments and same-subject improvement', () => {
   assert.match(reports, /'Improvement %': sameSubjectImprovement\(studentAttempts\)/);
 });
 
-test('question import preserves slash-style options that Excel auto-converts to dates', async () => {
+test('question import preserves hyphen-style options that Excel auto-converts to dates', async () => {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Questions');
   sheet.addRow(['Question', 'Type', 'Marks', 'Difficulty', 'Option1', 'Option2', 'Option3', 'Option4', 'Answer']);
@@ -98,7 +98,7 @@ test('question import preserves slash-style options that Excel auto-converts to 
     '1/52',
     new Date(Date.UTC(2026, 3, 15)),
     new Date(Date.UTC(2026, 3, 13)),
-    '1/13',
+    '1-13',
   ]);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   const { questions, errors } = await parseQuestionsWorkbook(buffer, 'questions.xlsx', {
@@ -108,14 +108,14 @@ test('question import preserves slash-style options that Excel auto-converts to 
     type: 'Multiple Choice',
   });
   assert.deepEqual(errors, []);
-  assert.deepEqual(questions[0].options, ['1/13', '1/52', '4/15', '4/13']);
+  assert.deepEqual(questions[0].options, ['1-13', '1/52', '4-15', '4-13']);
   assert.equal(questions[0].correctAnswer, 0);
 });
 
 test('question option repair cleans already-imported JavaScript date strings', () => {
   assert.equal(
     simplifyImportedDateOption('Sun Jan 04 2026 00:00:00 GMT+0000 (Coordinated Universal Time)'),
-    '1/4'
+    '1-4'
   );
   assert.equal(
     simplifyImportedDateOption('Sat Dec 30 1899 12:17:00 GMT+0000 (Coordinated Universal Time)'),

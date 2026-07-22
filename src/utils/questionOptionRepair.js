@@ -30,7 +30,7 @@ const simplifyImportedDateOption = (value) => {
   if (year === 1899 && month === 12 && day === 30) {
     return `${hour}:${String(minute + (second >= 30 ? 1 : 0)).padStart(2, '0')}`;
   }
-  return `${month}/${day}`;
+  return `${month}-${day}`;
 };
 
 const repairQuestionOptions = (options) => {

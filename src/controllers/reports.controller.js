@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const PDFDocument = require('pdfkit');
 const { buildJsonBuffer } = require('../utils/tabularFiles');
+const { answersMatch } = require('../utils/scoring');
 
 const REPORTS = new Set(['student-performance', 'attendance-activity', 'exam-analysis', 'question-analytics']);
 const TITLES = {
@@ -120,7 +121,7 @@ const questionRows = async (req, range) => {
     (Array.isArray(attempt.questionSnapshot) ? attempt.questionSnapshot : []).forEach(q => {
       const key = `${attempt.examId}:${q.id}`; const item = questions.get(key) || { Exam: attempt.exam.title, Subject: attempt.exam.subject, Question: q.text, Attempts: 0, Correct: 0, Incorrect: 0, Unanswered: 0 };
       item.Attempts += 1; const answer = answers.get(q.id) ?? attempt.answers?.[q.id];
-      if (!answer) item.Unanswered += 1; else if (answer === q.correctAnswer) item.Correct += 1; else item.Incorrect += 1;
+      if (!answer) item.Unanswered += 1; else if (answersMatch(answer, q.correctAnswer)) item.Correct += 1; else item.Incorrect += 1;
       questions.set(key, item);
     });
   });

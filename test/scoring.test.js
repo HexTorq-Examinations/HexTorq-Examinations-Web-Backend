@@ -23,3 +23,8 @@ test('deducts 25 percent per incorrect answered question when enabled', () => {
 test('does not penalize unanswered questions', () => {
   assert.equal(scoreAttemptSnapshot(questions, { q1: 'A' }, { negativeMarking: true, negativeMarkingRate: 0.25 }), 4);
 });
+
+test('matches imported hyphen and slash fraction answers', () => {
+  assert.equal(scoreAttemptSnapshot([{ id: 'q1', correctAnswer: '1-2', marks: 1 }], { q1: '1/2' }), 1);
+  assert.equal(scoreAttemptSnapshot([{ id: 'q1', correctAnswer: '1/13', marks: 1 }], { q1: '1-13' }), 1);
+});
