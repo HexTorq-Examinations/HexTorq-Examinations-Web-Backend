@@ -155,6 +155,130 @@ const attemptScope = (req) => req.user.role === 'ADMIN'
   ? { exam: { organizationId: req.user.organizationId } }
   : {};
 
+const liveMonitor = asyncHandler(async (req, res) => {
+  const now = new Date();
+  const examOrgFilter = req.user.role === 'ADMIN' && req.user.organizationId
+    ? { organizationId: req.user.organizationId }
+    : {};
+
+  const rawMappings = await prisma.examMapping.findMany({
+    where: {
+      status: { not: 'Cancelled' },
+      startAt: { lte: now },
+      exam: { ...examOrgFilter, status: 'Published' },
+    },
+    include: {
+      exam: { include: { _count: { select: { questions: true } } } },
+      class: {
+        include: {
+          students: {
+            include: { user: true },
+            orderBy: { registerNumber: 'asc' },
+          },
+        },
+      },
+    },
+    orderBy: { startAt: 'asc' },
+  });
+
+  const activeMappings = rawMappings.filter((mapping) => (
+    now <= new Date(mapping.endAt.getTime() + Math.max(0, mapping.graceMinutes || 0) * 60_000)
+  ));
+
+  const examIds = [...new Set(activeMappings.map((mapping) => mapping.examId))];
+  const studentUserIds = [...new Set(activeMappings.flatMap((mapping) => mapping.class.students.map((student) => student.userId)))];
+  const attempts = examIds.length && studentUserIds.length
+    ? await prisma.examAttempt.findMany({
+        where: { examId: { in: examIds }, userId: { in: studentUserIds } },
+        include: { answerRecords: { select: { questionId: true } } },
+        orderBy: { startedAt: 'desc' },
+      })
+    : [];
+
+  const latestAttemptByExamStudent = new Map();
+  attempts.forEach((attempt) => {
+    const key = `${attempt.examId}:${attempt.userId}`;
+    if (!latestAttemptByExamStudent.has(key)) latestAttemptByExamStudent.set(key, attempt);
+  });
+
+  const exams = new Map();
+  activeMappings.forEach((mapping) => {
+    const examEntry = exams.get(mapping.examId) || {
+      examId: mapping.examId,
+      title: mapping.exam.title,
+      subject: mapping.exam.subject,
+      duration: mapping.exam.duration,
+      totalMarks: mapping.exam.totalMarks,
+      questionCount: mapping.exam._count.questions,
+      totalMappedStudents: 0,
+      activeStudents: 0,
+      completedStudents: 0,
+      terminatedStudents: 0,
+      violationCount: 0,
+      mappings: [],
+    };
+
+    const students = mapping.class.students.map((profile) => {
+      const attempt = latestAttemptByExamStudent.get(`${mapping.examId}:${profile.userId}`);
+      const status = attempt?.status || 'NOT_STARTED';
+      const violations = Array.isArray(attempt?.violations) ? attempt.violations : [];
+      const answeredCount = attempt
+        ? (attempt.answerRecords.length || Object.keys(attempt.answers || {}).length)
+        : 0;
+      return {
+        userId: profile.userId,
+        attemptId: attempt?.id || null,
+        registerNumber: profile.registerNumber,
+        name: profile.user.name,
+        status,
+        answeredCount,
+        totalQuestions: mapping.exam._count.questions,
+        violationsCount: violations.length,
+        violations,
+        score: attempt?.score ?? null,
+        startedAt: attempt?.startedAt?.toISOString?.() || null,
+        endedAt: attempt?.endedAt?.toISOString?.() || null,
+        expiresAt: attempt?.expiresAt?.toISOString?.() || null,
+      };
+    });
+
+    const counts = students.reduce((out, student) => {
+      if (student.status === 'IN_PROGRESS') out.active += 1;
+      else if (student.status === 'COMPLETED') out.completed += 1;
+      else if (student.status === 'TERMINATED') out.terminated += 1;
+      else out.notStarted += 1;
+      out.violations += student.violationsCount;
+      return out;
+    }, { active: 0, completed: 0, terminated: 0, notStarted: 0, violations: 0 });
+
+    examEntry.totalMappedStudents += students.length;
+    examEntry.activeStudents += counts.active;
+    examEntry.completedStudents += counts.completed;
+    examEntry.terminatedStudents += counts.terminated;
+    examEntry.violationCount += counts.violations;
+    examEntry.mappings.push({
+      mappingId: mapping.id,
+      classId: mapping.classId,
+      className: mapping.class.name,
+      startAt: mapping.startAt.toISOString(),
+      endAt: mapping.endAt.toISOString(),
+      startTime: mapping.startTime,
+      endTime: mapping.endTime,
+      graceMinutes: mapping.graceMinutes,
+      totalStudents: students.length,
+      activeStudents: counts.active,
+      completedStudents: counts.completed,
+      terminatedStudents: counts.terminated,
+      notStartedStudents: counts.notStarted,
+      violationCount: counts.violations,
+      students,
+    });
+    exams.set(mapping.examId, examEntry);
+  });
+
+  res.json({ serverNow: now.toISOString(), exams: [...exams.values()] });
+});
+
 const listAttempts = asyncHandler(async (req, res) => {
   const attempts = await prisma.examAttempt.findMany({
     where: {
@@ -428,4 +552,4 @@ const analytics = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { list, publish, analytics, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
+module.exports = { list, publish, analytics, liveMonitor, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
