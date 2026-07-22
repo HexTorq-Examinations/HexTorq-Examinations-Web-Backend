@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateQuestion } = require('../src/controllers/questions.controller');
+const { parseQuestionsWorkbook } = require('../src/utils/questionImport');
+const ExcelJS = require('exceljs');
 const fs = require('node:fs');
 const path = require('node:path');
 const source = (relativePath) => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
@@ -80,4 +82,31 @@ test('reports use date-scoped assignments and same-subject improvement', () => {
   assert.match(reports, /const mappingWindow = dateWhere\(range\)/);
   assert.match(reports, /startAt: mappingWindow/);
   assert.match(reports, /'Improvement %': sameSubjectImprovement\(studentAttempts\)/);
+});
+
+test('question import preserves slash-style options that Excel auto-converts to dates', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Questions');
+  sheet.addRow(['Question', 'Type', 'Marks', 'Difficulty', 'Option1', 'Option2', 'Option3', 'Option4', 'Answer']);
+  sheet.addRow([
+    'A card is drawn from a standard deck of 52 cards. What is the probability of drawing a King?',
+    'Multiple Choice',
+    1,
+    'Medium',
+    new Date(Date.UTC(2026, 0, 13)),
+    '1/52',
+    new Date(Date.UTC(2026, 3, 15)),
+    new Date(Date.UTC(2026, 3, 13)),
+    '1/13',
+  ]);
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const { questions, errors } = await parseQuestionsWorkbook(buffer, 'questions.xlsx', {
+    subject: 'Math',
+    marks: 1,
+    difficulty: 'Medium',
+    type: 'Multiple Choice',
+  });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(questions[0].options, ['1/13', '1/52', '4/15', '4/13']);
+  assert.equal(questions[0].correctAnswer, 0);
 });

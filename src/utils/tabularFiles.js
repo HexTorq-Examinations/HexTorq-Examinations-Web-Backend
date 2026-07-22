@@ -17,6 +17,9 @@ const validateTabularExtension = (filename = '') => {
 
 const normalizeCell = (value) => {
   if (value === null || value === undefined) return '';
+  if (value instanceof Date) {
+    return `${value.getUTCMonth() + 1}/${value.getUTCDate()}`;
+  }
   if (typeof value === 'object') {
     if (Array.isArray(value.richText)) return value.richText.map((chunk) => chunk.text || '').join('');
     if (value.text !== undefined) return String(value.text);
@@ -87,6 +90,7 @@ const buildJsonBuffer = async (rows, sheetName, format) => {
 module.exports = {
   buildJsonBuffer,
   buildTableBuffer,
+  normalizeCell,
   readRowsFromBuffer,
   validateTabularExtension,
 };
