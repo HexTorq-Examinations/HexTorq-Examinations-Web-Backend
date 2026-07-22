@@ -21,6 +21,38 @@ const publicationState = (exam, now = new Date()) => {
   return { canPublish: true, publishBlockedReason: null };
 };
 
+const attemptStats = (attempts, totalMarks, passingMarks) => {
+  const completed = attempts.filter((attempt) => ['COMPLETED', 'TERMINATED'].includes(attempt.status));
+  const passed = completed.filter((attempt) => attempt.status === 'COMPLETED' && attempt.score >= passingMarks).length;
+  const averageScorePercent = completed.length && totalMarks
+    ? Math.round(completed.reduce((sum, attempt) => sum + (attempt.score / totalMarks) * 100, 0) / completed.length)
+    : 0;
+  return {
+    evaluated: completed.length,
+    completed: completed.filter((attempt) => attempt.status === 'COMPLETED').length,
+    terminated: completed.filter((attempt) => attempt.status === 'TERMINATED').length,
+    active: attempts.filter((attempt) => attempt.status === 'IN_PROGRESS').length,
+    averageScorePercent,
+    passRate: completed.length ? Math.round((passed / completed.length) * 1000) / 10 : 0,
+  };
+};
+
+const mappingSummaries = (exam) => (exam?.mappings || []).map((mapping) => {
+  const attempts = (exam.attempts || []).filter((attempt) => attempt.user?.studentProfile?.classId === mapping.classId);
+  return {
+    mappingId: mapping.id,
+    classId: mapping.classId,
+    className: mapping.class?.name || 'Class',
+    date: mapping.date?.toISOString?.() || mapping.date,
+    startAt: mapping.startAt?.toISOString?.() || mapping.startAt,
+    endAt: mapping.endAt?.toISOString?.() || mapping.endAt,
+    startTime: mapping.startTime,
+    endTime: mapping.endTime,
+    assignedStudents: mapping.class?._count?.students || 0,
+    ...attemptStats(attempts, exam.totalMarks, exam.passingMarks),
+  };
+});
+
 const toPublic = (r) => ({
   id: r.id,
   examId: r.examId,
@@ -29,6 +61,7 @@ const toPublic = (r) => ({
   totalStudents: r.totalStudents,
   publishedDate: r.publishedDate ? r.publishedDate.toISOString().split('T')[0] : '',
   status: r.status,
+  mappingSummaries: mappingSummaries(r.exam),
   ...publicationState(r.exam),
 });
 
@@ -72,7 +105,15 @@ const list = asyncHandler(async (req, res) => {
   await syncResultsFromAttempts(req);
   const results = await prisma.result.findMany({
     where: { ...scopeWhere(req), exam: { ...(scopeWhere(req).exam || {}), isTestExam: false } },
-    include: { exam: { include: { mappings: true, _count: { select: { attempts: { where: { status: 'IN_PROGRESS' } } } } } } },
+    include: {
+      exam: {
+        include: {
+          mappings: { include: { class: { include: { _count: { select: { students: true } } } } }, orderBy: { startAt: 'asc' } },
+          attempts: { include: { user: { include: { studentProfile: true } } } },
+          _count: { select: { attempts: { where: { status: 'IN_PROGRESS' } } } },
+        },
+      },
+    },
     orderBy: { id: 'desc' },
   });
   res.json(results.map(toPublic));
@@ -116,8 +157,12 @@ const attemptScope = (req) => req.user.role === 'ADMIN'
 
 const listAttempts = asyncHandler(async (req, res) => {
   const attempts = await prisma.examAttempt.findMany({
-    where: { ...attemptScope(req), ...(req.query.examId ? { examId: req.query.examId } : {}) },
-    include: { user: { include: { studentProfile: true } }, exam: true },
+    where: {
+      ...attemptScope(req),
+      ...(req.query.examId ? { examId: req.query.examId } : {}),
+      ...(req.query.classId ? { user: { studentProfile: { classId: String(req.query.classId) } } } : {}),
+    },
+    include: { user: { include: { studentProfile: { include: { class: true } } } }, exam: true },
     orderBy: { startedAt: 'desc' },
   });
   res.json(attempts.map((attempt) => ({
@@ -126,6 +171,8 @@ const listAttempts = asyncHandler(async (req, res) => {
     examTitle: attempt.exam.title,
     studentName: attempt.user.name,
     registerNumber: attempt.user.studentProfile?.registerNumber,
+    classId: attempt.user.studentProfile?.classId,
+    className: attempt.user.studentProfile?.class?.name,
     status: attempt.status,
     score: attempt.score,
     startedAt: attempt.startedAt,
