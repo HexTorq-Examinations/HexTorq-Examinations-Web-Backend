@@ -1,7 +1,7 @@
 const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
-const { scoreAttemptSnapshot } = require('../utils/scoring');
+const { answersMatch, scoreAttemptSnapshot } = require('../utils/scoring');
 const PDFDocument = require('pdfkit');
 const crypto = require('crypto');
 const { getResolvedSettings } = require('../utils/platformSettings');
@@ -32,10 +32,28 @@ const buildQuestionSnapshot = (exam, questions) => {
   return snapshot;
 };
 
-const toCandidateQuestions = (snapshot) => snapshot.map(({ correctAnswer, ...question }) => question);
+const repairSnapshotQuestion = (question) => {
+  const options = repairQuestionOptions(question.options).options;
+  const matchedCorrect = options.find((option) => answersMatch(option, question.correctAnswer));
+  return { ...question, options, correctAnswer: matchedCorrect || question.correctAnswer };
+};
 
-const answerRecordsToMap = (records) => Object.fromEntries(
-  records.map((record) => [record.questionId, record.selectedAnswer])
+const repairQuestionSnapshot = (snapshot) => (Array.isArray(snapshot) ? snapshot.map(repairSnapshotQuestion) : []);
+
+const toCandidateQuestions = (snapshot) => repairQuestionSnapshot(snapshot).map(({ correctAnswer, ...question }) => question);
+
+const normalizeAnswerMap = (answers, snapshot = []) => {
+  const repairedSnapshot = repairQuestionSnapshot(snapshot);
+  return Object.fromEntries(Object.entries(answers || {}).map(([questionId, selectedAnswer]) => {
+    const question = repairedSnapshot.find((item) => item.id === questionId);
+    const matched = question?.options?.find((option) => answersMatch(option, selectedAnswer));
+    return [questionId, matched || selectedAnswer];
+  }));
+};
+
+const answerRecordsToMap = (records, snapshot = []) => normalizeAnswerMap(
+  Object.fromEntries(records.map((record) => [record.questionId, record.selectedAnswer])),
+  snapshot
 );
 
 const ensureQuestionSnapshot = async (attempt) => {
@@ -57,8 +75,8 @@ const calculateScore = async (attempt) => {
     prisma.examAnswer.findMany({ where: { attemptId: frozenAttempt.id } }),
     Promise.resolve(frozenAttempt.answers || {}),
   ]);
-  const answers = records.length > 0 ? answerRecordsToMap(records) : legacyAnswers;
-  const snapshot = Array.isArray(frozenAttempt.questionSnapshot) ? frozenAttempt.questionSnapshot : [];
+  const snapshot = repairQuestionSnapshot(frozenAttempt.questionSnapshot);
+  const answers = records.length > 0 ? answerRecordsToMap(records, snapshot) : normalizeAnswerMap(legacyAnswers, snapshot);
   return scoreAttemptSnapshot(snapshot, answers, {
     negativeMarking: frozenAttempt.negativeMarking,
     negativeMarkingRate: frozenAttempt.negativeMarkingRate,
@@ -277,7 +295,7 @@ const getExamForTaking = asyncHandler(async (req, res) => {
     hasActiveAttempt: !!activeAttempt,
     attemptId: activeAttempt?.id || null,
     status: activeAttempt?.status || null,
-    answers: activeAttempt ? (answerRecords.length > 0 ? answerRecordsToMap(answerRecords) : activeAttempt.answers) : {},
+    answers: activeAttempt ? (answerRecords.length > 0 ? answerRecordsToMap(answerRecords, snapshot) : normalizeAnswerMap(activeAttempt.answers, snapshot)) : {},
     violations: activeAttempt?.violations || [],
     serverNow: new Date().toISOString(),
     startedAt: activeAttempt?.startedAt?.toISOString() || null,
@@ -363,7 +381,7 @@ const startAttempt = asyncHandler(async (req, res) => {
   res.status(201).json({
     attemptId: attempt.id,
     status: attempt.status,
-    answers: answerRecords.length > 0 ? answerRecordsToMap(answerRecords) : attempt.answers,
+    answers: answerRecords.length > 0 ? answerRecordsToMap(answerRecords, attempt.questionSnapshot) : normalizeAnswerMap(attempt.answers, attempt.questionSnapshot),
     violations: attempt.violations,
     questions: toCandidateQuestions(attempt.questionSnapshot),
     serverNow: new Date().toISOString(),
@@ -401,9 +419,11 @@ const saveAnswer = asyncHandler(async (req, res) => {
   }
 
   const frozenAttempt = await ensureQuestionSnapshot(attempt);
-  const question = frozenAttempt.questionSnapshot.find((item) => item.id === questionId);
+  const repairedSnapshot = repairQuestionSnapshot(frozenAttempt.questionSnapshot);
+  const question = repairedSnapshot.find((item) => item.id === questionId);
   if (!question) throw new ApiError(400, 'Question is not part of this attempt');
-  if (!question.options.includes(answer)) throw new ApiError(400, 'Answer is not a valid option for this question');
+  const normalizedAnswer = question.options.find((option) => answersMatch(option, answer));
+  if (!normalizedAnswer) throw new ApiError(400, 'Answer is not a valid option for this question');
 
   // Lock the attempt row while saving. The expiry worker must acquire the same
   // row before FINALIZING it, so an answer either commits before the deadline
@@ -420,14 +440,14 @@ const saveAnswer = asyncHandler(async (req, res) => {
     return tx.examAnswer.upsert({
       where: { attemptId_questionId: { attemptId: attempt.id, questionId } },
       update: {
-        selectedAnswer: answer,
+        selectedAnswer: normalizedAnswer,
         revision: { increment: 1 },
         syncStatus: 'SYNCED',
       },
       create: {
         attemptId: attempt.id,
         questionId,
-        selectedAnswer: answer,
+        selectedAnswer: normalizedAnswer,
         revision: 1,
         syncStatus: 'SYNCED',
       },

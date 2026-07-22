@@ -47,7 +47,7 @@ test('exam delivery settings are frozen onto each attempt', () => {
   assert.match(attempts, /strictFullscreen: settings\.strictFullscreen/);
   assert.match(attempts, /disableClipboard: settings\.disableClipboard/);
   assert.match(attempts, /hasActiveAttempt: !!activeAttempt/);
-  assert.match(attempts, /answers: activeAttempt \? \(answerRecords\.length > 0 \? answerRecordsToMap\(answerRecords\) : activeAttempt\.answers\) : \{\}/);
+  assert.match(attempts, /answers: activeAttempt \? \(answerRecords\.length > 0 \? answerRecordsToMap\(answerRecords, snapshot\) : normalizeAnswerMap\(activeAttempt\.answers, snapshot\)\) : \{\}/);
 });
 
 test('stale FINALIZING attempts preserve violation termination during worker retries', () => {

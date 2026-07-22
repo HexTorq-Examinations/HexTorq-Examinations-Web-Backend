@@ -27,4 +27,5 @@ test('does not penalize unanswered questions', () => {
 test('matches imported hyphen and slash fraction answers', () => {
   assert.equal(scoreAttemptSnapshot([{ id: 'q1', correctAnswer: '1-2', marks: 1 }], { q1: '1/2' }), 1);
   assert.equal(scoreAttemptSnapshot([{ id: 'q1', correctAnswer: '1/13', marks: 1 }], { q1: '1-13' }), 1);
+  assert.equal(scoreAttemptSnapshot([{ id: 'q1', correctAnswer: '1-2', marks: 1 }], { q1: 'Fri Jan 02 2026 00:00:00 GMT+0000 (Coordinated Universal Time)' }), 1);
 });

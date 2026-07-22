@@ -1,6 +1,7 @@
 const roundScore = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+const { simplifyImportedDateOption } = require('./questionOptionRepair');
 
-const canonicalAnswer = (value) => String(value ?? '').trim().replace(/^(\d{1,2})\/(\d{1,2})$/, '$1-$2');
+const canonicalAnswer = (value) => simplifyImportedDateOption(value).replace(/^(\d{1,2})\/(\d{1,2})$/, '$1-$2');
 
 const answersMatch = (given, correct) => canonicalAnswer(given) === canonicalAnswer(correct);
 
