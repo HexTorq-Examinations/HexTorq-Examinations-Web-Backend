@@ -39,7 +39,8 @@
     "nodemailer": "^9.0.3",
     "pdfkit": "^0.19.1",
     "pino": "^10.3.1",
-    "pino-http": "^11.0.0"
+    "pino-http": "^11.0.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "prisma": "^6.3.1"

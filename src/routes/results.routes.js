@@ -12,6 +12,7 @@ router.get('/analytics', ctrl.analytics);
 router.get('/reports/:type', reportsCtrl.generate);
 router.get('/export/all.csv', ctrl.exportAllCsv);
 router.get('/live', ctrl.liveMonitor);
+router.get('/live-logins', ctrl.liveLogins);
 router.get('/attempts', ctrl.listAttempts);
 router.get('/attempts/:id', ctrl.attemptDetail);
 router.get('/attempts/:id/scorecard.pdf', ctrl.attemptPdf);

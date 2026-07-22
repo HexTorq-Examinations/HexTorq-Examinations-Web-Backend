@@ -155,10 +155,10 @@ const attemptScope = (req) => req.user.role === 'ADMIN'
   ? { exam: { organizationId: req.user.organizationId } }
   : {};
 
-const liveMonitor = asyncHandler(async (req, res) => {
+const buildLiveMonitorPayload = async (user) => {
   const now = new Date();
-  const examOrgFilter = req.user.role === 'ADMIN' && req.user.organizationId
-    ? { organizationId: req.user.organizationId }
+  const examOrgFilter = user.role === 'ADMIN' && user.organizationId
+    ? { organizationId: user.organizationId }
     : {};
 
   const rawMappings = await prisma.examMapping.findMany({
@@ -276,7 +276,81 @@ const liveMonitor = asyncHandler(async (req, res) => {
     exams.set(mapping.examId, examEntry);
   });
 
-  res.json({ serverNow: now.toISOString(), exams: [...exams.values()] });
+  return { serverNow: now.toISOString(), exams: [...exams.values()] };
+};
+
+const liveMonitor = asyncHandler(async (req, res) => {
+  res.json(await buildLiveMonitorPayload(req.user));
+});
+
+const buildLiveLoginsPayload = async (user) => {
+  const now = new Date();
+  const classWhere = user.role === 'ADMIN' && user.organizationId
+    ? { department: { school: { batch: { organizationId: user.organizationId } } } }
+    : {};
+
+  const classes = await prisma.class.findMany({
+    where: classWhere,
+    include: {
+      department: { include: { school: { include: { batch: true } } } },
+      students: {
+        include: {
+          user: {
+            include: {
+              refreshTokens: {
+                where: { revokedAt: null, expiresAt: { gt: now } },
+                select: { id: true, createdAt: true, expiresAt: true },
+                orderBy: { createdAt: 'desc' },
+              },
+            },
+          },
+        },
+        orderBy: { registerNumber: 'asc' },
+      },
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  const classrooms = classes.map((cls) => {
+    const students = cls.students.map((profile) => {
+      const activeSessions = profile.user.refreshTokens || [];
+      return {
+        userId: profile.userId,
+        registerNumber: profile.registerNumber,
+        name: profile.user.name,
+        email: profile.user.email,
+        status: profile.user.status,
+        isLoggedIn: activeSessions.length > 0,
+        activeSessionCount: activeSessions.length,
+        lastLoginAt: profile.user.lastLoginAt?.toISOString?.() || null,
+        currentSessionStartedAt: activeSessions[0]?.createdAt?.toISOString?.() || null,
+        sessionExpiresAt: activeSessions[0]?.expiresAt?.toISOString?.() || null,
+      };
+    });
+    return {
+      classId: cls.id,
+      className: cls.name,
+      departmentName: cls.department.name,
+      schoolName: cls.department.school.name,
+      batchName: cls.department.school.batch.name,
+      totalStudents: students.length,
+      loggedInStudents: students.filter((student) => student.isLoggedIn).length,
+      offlineStudents: students.filter((student) => !student.isLoggedIn).length,
+      students,
+    };
+  }).filter((classroom) => classroom.totalStudents > 0);
+
+  return {
+    serverNow: now.toISOString(),
+    totalClasses: classrooms.length,
+    totalStudents: classrooms.reduce((sum, classroom) => sum + classroom.totalStudents, 0),
+    loggedInStudents: classrooms.reduce((sum, classroom) => sum + classroom.loggedInStudents, 0),
+    classrooms,
+  };
+};
+
+const liveLogins = asyncHandler(async (req, res) => {
+  res.json(await buildLiveLoginsPayload(req.user));
 });
 
 const listAttempts = asyncHandler(async (req, res) => {
@@ -552,4 +626,4 @@ const analytics = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { list, publish, analytics, liveMonitor, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
+module.exports = { list, publish, analytics, buildLiveMonitorPayload, buildLiveLoginsPayload, liveMonitor, liveLogins, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
