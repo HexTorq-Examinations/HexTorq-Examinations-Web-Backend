@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { parseQuestionsWorkbook, generateTemplateBuffer } = require('../utils/questionImport');
+const { repairQuestionOptions } = require('../utils/questionOptionRepair');
 
 const toPublic = (q) => ({
   id: q.id,
@@ -10,7 +11,7 @@ const toPublic = (q) => ({
   type: q.type,
   difficulty: q.difficulty,
   marks: q.marks,
-  options: q.options,
+  options: repairQuestionOptions(q.options).options,
   correctAnswer: q.correctAnswer,
   explanation: q.explanation || undefined,
   examId: q.examId,

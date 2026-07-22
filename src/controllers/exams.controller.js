@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const crypto = require('crypto');
+const { repairQuestionOptions } = require('../utils/questionOptionRepair');
 
 const scopeWhere = (req) => {
   if (req.user.role === 'ADMIN' && req.user.organizationId) {
@@ -34,6 +35,11 @@ const toPublic = (exam) => ({
   parentExamId: exam.parentExamId || undefined,
   publishedAt: exam.publishedAt || undefined,
   closedAt: exam.closedAt || undefined,
+});
+
+const toPublicQuestion = (question) => ({
+  ...question,
+  options: repairQuestionOptions(question.options).options,
 });
 
 const list = asyncHandler(async (req, res) => {
@@ -164,7 +170,7 @@ const preview = asyncHandler(async (req, res) => {
     include: { questions: { orderBy: { createdAt: 'asc' } }, _count: { select: { questions: true, mappings: true } } },
   });
   if (!exam) throw new ApiError(404, 'Exam not found');
-  res.json({ ...toPublic(exam), questions: exam.questions });
+  res.json({ ...toPublic(exam), questions: exam.questions.map(toPublicQuestion) });
 });
 
 const duplicate = asyncHandler(async (req, res) => {
@@ -196,7 +202,7 @@ const duplicate = asyncHandler(async (req, res) => {
       organizationId: source.organizationId,
       questions: {
         create: source.questions.map(({ text, subject, type, difficulty, marks, options, correctAnswer, explanation }) => ({
-          text, subject, type, difficulty, marks, options, correctAnswer, explanation,
+          text, subject, type, difficulty, marks, options: repairQuestionOptions(options).options, correctAnswer, explanation,
         })),
       },
     },

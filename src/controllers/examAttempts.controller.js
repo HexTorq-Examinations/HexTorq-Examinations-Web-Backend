@@ -5,6 +5,7 @@ const { scoreAttemptSnapshot } = require('../utils/scoring');
 const PDFDocument = require('pdfkit');
 const crypto = require('crypto');
 const { getResolvedSettings } = require('../utils/platformSettings');
+const { repairQuestionOptions } = require('../utils/questionOptionRepair');
 
 // Unbiased Fisher-Yates shuffle. Never mutates the input array.
 const shuffle = (arr) => {
@@ -17,13 +18,16 @@ const shuffle = (arr) => {
 };
 
 const buildQuestionSnapshot = (exam, questions) => {
-  let snapshot = questions.map((question) => ({
-    id: question.id,
-    text: question.text,
-    options: exam.shuffleOptions ? shuffle(question.options) : [...question.options],
-    correctAnswer: question.options[question.correctAnswer],
-    marks: question.marks,
-  }));
+  let snapshot = questions.map((question) => {
+    const options = repairQuestionOptions(question.options).options;
+    return {
+      id: question.id,
+      text: question.text,
+      options: exam.shuffleOptions ? shuffle(options) : [...options],
+      correctAnswer: options[question.correctAnswer],
+      marks: question.marks,
+    };
+  });
   if (exam.shuffleQuestions) snapshot = shuffle(snapshot);
   return snapshot;
 };
