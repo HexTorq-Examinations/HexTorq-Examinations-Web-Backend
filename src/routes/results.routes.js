@@ -11,6 +11,7 @@ router.get('/', ctrl.list);
 router.get('/analytics', ctrl.analytics);
 router.get('/reports/:type', reportsCtrl.generate);
 router.get('/export/all.csv', ctrl.exportAllCsv);
+router.get('/export/mapping/:mappingId.csv', ctrl.exportMappingCsv);
 router.get('/live', ctrl.liveMonitor);
 router.get('/live-logins', ctrl.liveLogins);
 router.get('/attempts', ctrl.listAttempts);
@@ -22,6 +23,7 @@ router.post('/attempts/:id/regrade', ctrl.regrade);
 router.post('/attempts/:id/extend', ctrl.extendAttempt);
 router.post('/attempts/:id/reset', ctrl.resetAttempt);
 router.get('/:id/export.csv', ctrl.exportCsv);
+router.get('/:id/export-detailed.csv', ctrl.exportDetailedCsv);
 router.post('/:id/publish', ctrl.publish);
 
 module.exports = router;

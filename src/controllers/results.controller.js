@@ -476,6 +476,120 @@ const resetAttempt = asyncHandler(async (req, res) => {
 });
 
 const csvEscape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+const csvFilename = (value) => String(value || 'export').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'export';
+
+const buildMappingResultRows = async (mapping) => {
+  const students = mapping.class.students || [];
+  const attempts = await prisma.examAttempt.findMany({
+    where: {
+      examId: mapping.examId,
+      userId: { in: students.map((student) => student.userId) },
+    },
+    include: { answerRecords: { select: { questionId: true } } },
+    orderBy: [{ userId: 'asc' }, { attemptNumber: 'desc' }, { startedAt: 'desc' }],
+  });
+  const latestAttemptByUser = new Map();
+  attempts.forEach((attempt) => {
+    if (!latestAttemptByUser.has(attempt.userId)) latestAttemptByUser.set(attempt.userId, attempt);
+  });
+
+  const totalQuestions = mapping.exam._count?.questions || 0;
+  return students.map((profile) => {
+    const attempt = latestAttemptByUser.get(profile.userId);
+    const violations = Array.isArray(attempt?.violations) ? attempt.violations : [];
+    const answeredCount = attempt
+      ? (attempt.answerRecords?.length || Object.keys(attempt.answers || {}).length)
+      : 0;
+    const scorePercent = attempt && mapping.exam.totalMarks
+      ? Math.round((Number(attempt.score || 0) / mapping.exam.totalMarks) * 10000) / 100
+      : '';
+    const passed = attempt?.status === 'COMPLETED' && Number(attempt.score || 0) >= mapping.exam.passingMarks;
+    return [
+      mapping.exam.title,
+      mapping.exam.subject,
+      mapping.examId,
+      mapping.id,
+      mapping.date?.toISOString?.().split('T')[0] || '',
+      mapping.startTime,
+      mapping.endTime,
+      mapping.startAt?.toISOString?.() || '',
+      mapping.endAt?.toISOString?.() || '',
+      mapping.timezone,
+      mapping.hall,
+      mapping.status,
+      mapping.graceMinutes,
+      mapping.class.department.school.batch.name,
+      mapping.class.department.school.name,
+      mapping.class.department.name,
+      mapping.class.name,
+      profile.registerNumber,
+      profile.user.name,
+      profile.user.email,
+      profile.user.phone || '',
+      profile.user.status,
+      profile.extraTimeMinutes,
+      profile.accessibilityNotes || '',
+      attempt?.id || '',
+      attempt?.attemptNumber || '',
+      attempt?.status || 'NOT_STARTED',
+      attempt?.startedAt?.toISOString?.() || '',
+      attempt?.endedAt?.toISOString?.() || '',
+      attempt?.expiresAt?.toISOString?.() || '',
+      attempt?.score ?? '',
+      mapping.exam.totalMarks,
+      scorePercent,
+      attempt ? (passed ? 'PASS' : 'FAIL') : 'NOT_ATTEMPTED',
+      answeredCount,
+      totalQuestions,
+      violations.length,
+      attempt?.manuallyEvaluated ? 'Yes' : 'No',
+      attempt?.evaluationReason || '',
+    ];
+  });
+};
+
+const detailedResultHeaders = [
+  'Exam Name',
+  'Subject',
+  'Exam ID',
+  'Mapping ID',
+  'Mapping Date',
+  'Start Time',
+  'End Time',
+  'Start At',
+  'End At',
+  'Timezone',
+  'Hall',
+  'Mapping Status',
+  'Grace Minutes',
+  'Batch',
+  'School',
+  'Department',
+  'Class',
+  'Register Number',
+  'Student Name',
+  'Email',
+  'Phone',
+  'Student Status',
+  'Extra Time Minutes',
+  'Accessibility Notes',
+  'Attempt ID',
+  'Attempt Number',
+  'Attempt Status',
+  'Started At',
+  'Ended At',
+  'Expires At',
+  'Score',
+  'Total Marks',
+  'Score Percent',
+  'Result',
+  'Answered Questions',
+  'Total Questions',
+  'Violations Count',
+  'Manually Evaluated',
+  'Evaluation Reason',
+];
+
 const exportCsv = asyncHandler(async (req, res) => {
   const scoped = scopeWhere(req);
   const result = await prisma.result.findFirst({ where: { id: req.params.id, ...scoped, exam: { ...(scoped.exam || {}), isTestExam: false } }, include: { exam: true } });
@@ -484,6 +598,60 @@ const exportCsv = asyncHandler(async (req, res) => {
   const rows = [['Register Number', 'Student', 'Email', 'Score', 'Status'], ...attempts.map((a) => [a.user.studentProfile?.registerNumber, a.user.name, a.user.email, a.score, a.status])];
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', `attachment; filename="${result.exam.title.replace(/[^a-z0-9]+/gi, '-')}-results.csv"`);
+  res.send(rows.map((row) => row.map(csvEscape).join(',')).join('\n'));
+});
+
+const exportMappingCsv = asyncHandler(async (req, res) => {
+  const examOrgFilter = req.user.role === 'ADMIN' && req.user.organizationId
+    ? { organizationId: req.user.organizationId }
+    : {};
+  const mapping = await prisma.examMapping.findFirst({
+    where: { id: req.params.mappingId, exam: { ...examOrgFilter, isTestExam: false } },
+    include: {
+      exam: { include: { _count: { select: { questions: true } } } },
+      class: {
+        include: {
+          department: { include: { school: { include: { batch: true } } } },
+          students: { include: { user: true }, orderBy: { registerNumber: 'asc' } },
+        },
+      },
+    },
+  });
+  if (!mapping) throw new ApiError(404, 'Exam mapping not found');
+  const rows = [detailedResultHeaders, ...(await buildMappingResultRows(mapping))];
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${csvFilename(`${mapping.exam.title}-${mapping.class.name}`)}-mapping-results.csv"`);
+  res.send(rows.map((row) => row.map(csvEscape).join(',')).join('\n'));
+});
+
+const exportDetailedCsv = asyncHandler(async (req, res) => {
+  const scoped = scopeWhere(req);
+  const result = await prisma.result.findFirst({
+    where: { id: req.params.id, ...scoped, exam: { ...(scoped.exam || {}), isTestExam: false } },
+    include: {
+      exam: {
+        include: {
+          mappings: {
+            include: {
+              exam: { include: { _count: { select: { questions: true } } } },
+              class: {
+                include: {
+                  department: { include: { school: { include: { batch: true } } } },
+                  students: { include: { user: true }, orderBy: { registerNumber: 'asc' } },
+                },
+              },
+            },
+            orderBy: { startAt: 'asc' },
+          },
+        },
+      },
+    },
+  });
+  if (!result) throw new ApiError(404, 'Result not found');
+  const rows = [detailedResultHeaders];
+  for (const mapping of result.exam.mappings) rows.push(...(await buildMappingResultRows(mapping)));
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${csvFilename(result.exam.title)}-detailed-results.csv"`);
   res.send(rows.map((row) => row.map(csvEscape).join(',')).join('\n'));
 });
 
@@ -626,4 +794,4 @@ const analytics = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { list, publish, analytics, buildLiveMonitorPayload, buildLiveLoginsPayload, liveMonitor, liveLogins, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
+module.exports = { list, publish, analytics, buildLiveMonitorPayload, buildLiveLoginsPayload, liveMonitor, liveLogins, listAttempts, attemptDetail, manualEvaluate, regrade, extendAttempt, resetAttempt, exportCsv, exportMappingCsv, exportDetailedCsv, exportAllCsv, attemptPdf, attemptResponsePdf };
